@@ -930,12 +930,22 @@ async function addRecipeToShoppingList(recipeId) {
   const recipe = state.recipes.find(r => r.id === recipeId);
   if (!recipe) return;
 
+  const btn = $('add-to-shopping-btn');
+
   if (state.addedRecipeIds.has(recipeId)) {
-    showToast('Already in shopping list');
+    if (btn) { btn.disabled = true; btn.textContent = 'Removing...'; }
+    try {
+      await removeRecipeFromShoppingList(recipeId);
+      showToast(`"${recipe.title}" removed from list`);
+      renderRecipeDetail(recipeId);
+    } catch (err) {
+      console.error(err);
+      showToast('Error updating shopping list');
+      if (btn) { btn.disabled = false; }
+    }
     return;
   }
 
-  const btn = $('add-to-shopping-btn');
   if (btn) { btn.disabled = true; btn.textContent = 'Adding...'; }
 
   try {

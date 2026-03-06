@@ -1041,7 +1041,7 @@ function copyShoppingListSimple() {
     if (hasMeasurementUnit) {
       return item.name;
     }
-    const qty = formatShoppingItem(item);
+    const qty = item.quantities.map(({ qty }) => qty !== null ? formatQty(qty) : null).filter(Boolean).join(' + ');
     return qty ? `${qty} ${item.name}` : item.name;
   }).join('\n');
   navigator.clipboard.writeText(text).then(

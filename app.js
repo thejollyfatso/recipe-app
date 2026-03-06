@@ -173,6 +173,69 @@ function formatShoppingItem(item) {
 }
 
 // ============================================================
+// Ingredient text parser (auto-entry mode)
+// ============================================================
+const INGREDIENT_UNITS = new Set([
+  'cup','cups','tablespoon','tablespoons','tbsp','tbs',
+  'teaspoon','teaspoons','tsp','ounce','ounces','oz',
+  'pound','pounds','lb','lbs','gram','grams','g',
+  'kilogram','kilograms','kg','milliliter','milliliters','ml',
+  'liter','liters','l','pint','pints','pt','quart','quarts','qt',
+  'gallon','gallons','gal','piece','pieces','pc','pcs',
+  'slice','slices','clove','cloves','sprig','sprigs',
+  'bunch','bunches','head','heads','stalk','stalks',
+  'can','cans','package','packages','pkg','pinch','pinches',
+  'dash','dashes','handful','handfuls','sheet','sheets',
+]);
+
+function parseIngredientLine(line) {
+  let s = line.trim();
+  // Strip bullet points and numbered list markers
+  s = s.replace(/^[-•*·]\s*/, '').replace(/^\d+\.\s+/, '');
+  if (!s) return null;
+
+  // Replace unicode fractions with ASCII equivalents
+  s = s.replace(/½/g,'1/2').replace(/⅓/g,'1/3').replace(/⅔/g,'2/3')
+       .replace(/¼/g,'1/4').replace(/¾/g,'3/4').replace(/⅛/g,'1/8');
+
+  // Remove trailing parenthetical notes and common trailing phrases
+  s = s.replace(/\s*\(.*?\)\s*$/, '').trim();
+  s = s.replace(/,?\s*(to taste|or to taste|as needed|as required)$/i, '').trim();
+
+  let qty = '';
+  let rest = s;
+
+  // Match leading quantity: mixed number (1 1/2), fraction (1/2), or decimal/integer
+  const qtyMatch = rest.match(/^(\d+\s+\d+\/\d+|\d+\/\d+|\d*\.?\d+)\s*/);
+  if (qtyMatch) {
+    qty = qtyMatch[1].trim();
+    rest = rest.slice(qtyMatch[0].length);
+  } else if (/^an?\s+/i.test(rest)) {
+    qty = '1';
+    rest = rest.replace(/^an?\s+/i, '');
+  }
+
+  // Match unit (first word if it's a known unit)
+  let unit = '';
+  const firstWord = (rest.split(/\s+/)[0] || '').toLowerCase().replace(/[.,;]$/, '');
+  if (INGREDIENT_UNITS.has(firstWord)) {
+    unit = firstWord;
+    rest = rest.slice(firstWord.length).trim();
+  }
+
+  // Strip "of" connector (e.g. "2 cups of flour" → name = "flour")
+  rest = rest.replace(/^of\s+/i, '');
+
+  const name = rest.trim();
+  if (!name) return null;
+  return { qty, unit, name };
+}
+
+function parseIngredientBlock(text) {
+  return text.split('\n').map(parseIngredientLine).filter(Boolean);
+}
+
+// ============================================================
 // DOM helpers
 // ============================================================
 const $ = id => document.getElementById(id);
@@ -344,11 +407,24 @@ function renderRecipeEdit(id) {
       <textarea class="form-input" id="input-notes" placeholder="Cooking time, tips, serving suggestions...">${escHtml(recipe?.notes || '')}</textarea>
     </div>
     <div class="form-group">
-      <label class="form-label">Ingredients</label>
-      <div class="ingredients-editor" id="ingredients-editor"></div>
-      <button type="button" class="btn-add-ingredient" id="btn-add-ingredient">
-        <span>&#43;</span> Add Ingredient
-      </button>
+      <div class="ing-mode-header">
+        <label class="form-label">Ingredients</label>
+        <div class="ing-mode-toggle">
+          <button type="button" class="ing-mode-btn active" data-mode="manual">Manual</button>
+          <button type="button" class="ing-mode-btn" data-mode="auto">Paste Text</button>
+        </div>
+      </div>
+      <div id="ing-manual-section">
+        <div class="ingredients-editor" id="ingredients-editor"></div>
+        <button type="button" class="btn-add-ingredient" id="btn-add-ingredient">
+          <span>&#43;</span> Add Ingredient
+        </button>
+      </div>
+      <div id="ing-auto-section" class="hidden">
+        <textarea class="form-input ing-auto-textarea" id="ing-auto-text"
+          placeholder="Paste your ingredient list here, one per line.&#10;&#10;e.g.&#10;2 cups flour&#10;1 tsp salt&#10;3 eggs&#10;500g chicken breast"></textarea>
+        <p class="ing-auto-hint">Switch to Manual to review and edit parsed ingredients.</p>
+      </div>
     </div>
     <div class="form-actions">
       <button class="btn-primary" id="btn-save-recipe">Save Recipe</button>
@@ -380,9 +456,50 @@ function renderRecipeEdit(id) {
 
   $('btn-add-ingredient').addEventListener('click', () => {
     addIngredientRow();
-    // Focus the name field of the new row
     const rows = editor.querySelectorAll('.ingredient-row');
     rows[rows.length - 1].querySelector('.ing-name').focus();
+  });
+
+  // Ingredient entry mode toggle
+  let currentMode = 'manual';
+  document.querySelectorAll('.ing-mode-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const newMode = btn.dataset.mode;
+      if (newMode === currentMode) return;
+
+      if (newMode === 'auto') {
+        // Serialize current manual rows into the textarea
+        const rows = editor.querySelectorAll('.ingredient-row');
+        const lines = [];
+        for (const row of rows) {
+          const q = row.querySelector('.ing-qty').value.trim();
+          const u = row.querySelector('.ing-unit').value.trim();
+          const n = row.querySelector('.ing-name').value.trim();
+          if (n) lines.push([q, u, n].filter(Boolean).join(' '));
+        }
+        $('ing-auto-text').value = lines.join('\n');
+        $('ing-manual-section').classList.add('hidden');
+        $('ing-auto-section').classList.remove('hidden');
+        $('ing-auto-text').focus();
+      } else {
+        // Parse textarea content into manual rows
+        const parsed = parseIngredientBlock($('ing-auto-text').value);
+        editor.innerHTML = '';
+        if (parsed.length) {
+          parsed.forEach(ing => addIngredientRow(ing.qty, ing.unit, ing.name));
+          showToast(`${parsed.length} ingredient${parsed.length !== 1 ? 's' : ''} parsed`);
+        } else {
+          addIngredientRow();
+        }
+        $('ing-auto-section').classList.add('hidden');
+        $('ing-manual-section').classList.remove('hidden');
+      }
+
+      currentMode = newMode;
+      document.querySelectorAll('.ing-mode-btn').forEach(b => {
+        b.classList.toggle('active', b.dataset.mode === newMode);
+      });
+    });
   });
 
   $('btn-save-recipe').addEventListener('click', () => saveRecipe(id));
@@ -489,16 +606,21 @@ async function saveRecipe(id) {
   const title = $('input-title').value.trim();
   if (!title) { showToast('Please enter a recipe name'); return; }
 
-  const rows = $('ingredients-editor').querySelectorAll('.ingredient-row');
-  const ingredients = [];
-  for (const row of rows) {
-    const name = row.querySelector('.ing-name').value.trim();
-    if (!name) continue;
-    ingredients.push({
-      qty: row.querySelector('.ing-qty').value.trim(),
-      unit: row.querySelector('.ing-unit').value.trim(),
-      name,
-    });
+  let ingredients = [];
+  const autoSection = $('ing-auto-section');
+  if (autoSection && !autoSection.classList.contains('hidden')) {
+    ingredients = parseIngredientBlock($('ing-auto-text').value);
+  } else {
+    const rows = $('ingredients-editor').querySelectorAll('.ingredient-row');
+    for (const row of rows) {
+      const name = row.querySelector('.ing-name').value.trim();
+      if (!name) continue;
+      ingredients.push({
+        qty: row.querySelector('.ing-qty').value.trim(),
+        unit: row.querySelector('.ing-unit').value.trim(),
+        name,
+      });
+    }
   }
 
   const btn = $('btn-save-recipe');

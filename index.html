@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="description" content="Recipe and shopping list app" />
+
+  <!-- PWA / iOS -->
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="Kitchen" />
+  <meta name="theme-color" content="#E8623A" />
+  <link rel="apple-touch-icon" href="icon.svg" />
+  <link rel="manifest" href="manifest.json" />
+
+  <title>Mama's Kitchen</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="app">
+
+    <!-- Header -->
+    <header id="app-header">
+      <button id="back-btn" class="hidden" aria-label="Back">&#8249;</button>
+      <h1 id="header-title">Mama's Kitchen</h1>
+      <div id="header-actions"></div>
+    </header>
+
+    <!-- Views -->
+    <div id="main-content">
+
+      <!-- Recipes List -->
+      <div id="view-recipes" class="view hidden">
+        <div id="recipes-list"></div>
+      </div>
+
+      <!-- Recipe Detail -->
+      <div id="view-recipe-detail" class="view hidden"></div>
+
+      <!-- Recipe Edit / New -->
+      <div id="view-recipe-edit" class="view hidden"></div>
+
+      <!-- Shopping List -->
+      <div id="view-shopping" class="view hidden"></div>
+
+    </div>
+
+    <!-- FAB: Add Recipe -->
+    <button id="fab-add" class="fab hidden" aria-label="Add recipe">&#43;</button>
+
+    <!-- Bottom Navigation -->
+    <nav id="bottom-nav">
+      <button class="nav-btn active" data-view="recipes">
+        <span class="nav-icon">&#127859;</span>
+        Recipes
+      </button>
+      <button class="nav-btn" data-view="shopping">
+        <span class="nav-icon">&#128722;</span>
+        Shopping
+      </button>
+    </nav>
+
+  </div>
+
+  <!-- Toast -->
+  <div id="toast"></div>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>

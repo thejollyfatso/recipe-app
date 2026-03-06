@@ -29,12 +29,11 @@ const state = {
   recipes: [],
   shoppingList: [],
   addedRecipeIds: new Set(),
-  currentView: 'recipes', // 'recipes' | 'detail' | 'edit' | 'shopping'
+  currentView: 'recipes',
   viewingRecipeId: null,
-  editingRecipeId: null,   // null = new recipe
+  editingRecipeId: null,
 };
 
-// Firestore unsubscribe handles
 let unsubRecipes = null;
 let unsubShopping = null;
 let unsubMeta = null;
@@ -89,8 +88,6 @@ function levenshtein(a, b) {
 function ingredientsMatch(a, b) {
   if (a === b) return true;
   const maxLen = Math.max(a.length, b.length);
-  // Allow 1 edit for words of 4+ chars (catches "chilli" vs "chili")
-  // but require same length ±1 to avoid false positives
   if (maxLen < 4) return false;
   return levenshtein(a, b) === 1;
 }
@@ -105,6 +102,30 @@ function parseQty(qtyStr) {
   return parseFloat(s) || null;
 }
 
+// Returns upper bound of a range qty string, or normal qty for scalars.
+// Used when adding to shopping list so we always buy enough.
+function parseQtyUpper(qtyStr) {
+  if (!qtyStr || qtyStr.trim() === '' || qtyStr.trim() === '~') return null;
+  const s = qtyStr.trim();
+  // "X to Y" range
+  const toRange = s.match(/^.+?\s+to\s+(.+)$/i);
+  if (toRange) return parseQty(toRange[1].trim());
+  // "X-Y" hyphen range (digit-hyphen-digit)
+  const hyphenRange = s.match(/^(.+?)\s*-\s*(\d[\d\s/.]*)$/);
+  if (hyphenRange && parseQty(hyphenRange[1].trim()) !== null) {
+    return parseQty(hyphenRange[2].trim());
+  }
+  return parseQty(s);
+}
+
+function isRangeQty(qtyStr) {
+  if (!qtyStr) return false;
+  const s = qtyStr.trim();
+  if (/\s+to\s+/i.test(s)) return true;
+  if (/\d\s*-\s*\d/.test(s)) return true;
+  return false;
+}
+
 function formatQty(num) {
   if (num === null || num === undefined) return '';
   const FRACS = { 0.25: '\u00BC', 0.5: '\u00BD', 0.75: '\u00BE', 0.333: '\u2153', 0.667: '\u2154', 0.125: '\u215B' };
@@ -113,14 +134,20 @@ function formatQty(num) {
   const decimal = Math.round((rounded - whole) * 1000) / 1000;
   const fracChar = FRACS[Math.round(decimal * 1000) / 1000];
   if (fracChar) return whole > 0 ? `${whole}\u202F${fracChar}` : fracChar;
-  // Nice decimals
   if (rounded === Math.floor(rounded)) return String(Math.floor(rounded));
   return String(Math.round(rounded * 100) / 100);
 }
 
 function formatIngredientDisplay(qty, unit, name) {
-  const qtyNum = parseQty(qty);
-  const qtyStr = qtyNum !== null ? formatQty(qtyNum) : '~';
+  let qtyStr;
+  if (!qty || qty.trim() === '') {
+    qtyStr = '~';
+  } else if (isRangeQty(qty)) {
+    qtyStr = qty.trim();
+  } else {
+    const qtyNum = parseQty(qty);
+    qtyStr = qtyNum !== null ? formatQty(qtyNum) : qty.trim();
+  }
   const unitStr = unit ? ` ${unit}` : '';
   return { qty: `${qtyStr}${unitStr}`, name };
 }
@@ -130,12 +157,14 @@ function mergeIngredients(existingItems, newIngredients, recipeId) {
     ...item,
     quantities: item.quantities.map(q => ({ ...q })),
     sourceRecipes: [...(item.sourceRecipes || [])],
+    substitutions: [...(item.substitutions || [])],
   }));
 
   for (const ing of newIngredients) {
     const normalized = normalizeIngredientName(ing.name);
-    const qty = parseQty(ing.qty);
+    const qty = parseQtyUpper(ing.qty);  // always use upper bound for ranges
     const unit = (ing.unit || '').toLowerCase().trim();
+    const subs = ing.substitutions || [];
 
     const matchIdx = result.findIndex(item =>
       ingredientsMatch(item.normalizedName, normalized)
@@ -148,6 +177,8 @@ function mergeIngredients(existingItems, newIngredients, recipeId) {
         quantities: [{ qty, unit }],
         checked: false,
         sourceRecipes: [recipeId],
+        substitutions: subs,
+        substitutedWith: null,
       });
     } else {
       const item = result[matchIdx];
@@ -157,6 +188,9 @@ function mergeIngredients(existingItems, newIngredients, recipeId) {
         item.quantities[existingQtyIdx].qty += qty;
       } else {
         item.quantities.push({ qty, unit });
+      }
+      for (const sub of subs) {
+        if (!item.substitutions.includes(sub)) item.substitutions.push(sub);
       }
     }
   }
@@ -173,7 +207,7 @@ function formatShoppingItem(item) {
 }
 
 // ============================================================
-// Ingredient text parser (auto-entry mode)
+// Ingredient text parser
 // ============================================================
 const INGREDIENT_UNITS = new Set([
   'cup','cups','tablespoon','tablespoons','tbsp','tbs',
@@ -188,31 +222,71 @@ const INGREDIENT_UNITS = new Set([
   'dash','dashes','handful','handfuls','sheet','sheets',
 ]);
 
-function parseIngredientLine(line) {
-  let s = line.trim();
-  // Strip bullet points and numbered list markers
-  s = s.replace(/^[-•*·]\s*/, '').replace(/^\d+\.\s+/, '');
+// Reusable qty sub-pattern for range matching
+const QTY_PAT = '(?:\\d+\\s+\\d+\\/\\d+|\\d+\\/\\d+|\\d+(?:\\.\\d+)?)';
+
+function parseIngredientLine(rawLine) {
+  let s = rawLine.trim();
+
+  // Strip bullet markers: hyphen/dash/bullet followed by space (not range hyphens between digits)
+  s = s.replace(/^[-\u2013\u2014\u2022*\u00B7]\s+/, '');
+  // Strip numbered list markers: "1. " or "1) "
+  s = s.replace(/^\d+[.)]\s+/, '');
   if (!s) return null;
 
-  // Replace unicode fractions with ASCII equivalents
-  s = s.replace(/½/g,'1/2').replace(/⅓/g,'1/3').replace(/⅔/g,'2/3')
-       .replace(/¼/g,'1/4').replace(/¾/g,'3/4').replace(/⅛/g,'1/8');
+  // Replace unicode fractions
+  s = s.replace(/\u00BD/g,'1/2').replace(/\u2153/g,'1/3').replace(/\u2154/g,'2/3')
+       .replace(/\u00BC/g,'1/4').replace(/\u00BE/g,'3/4').replace(/\u215B/g,'1/8');
 
-  // Remove trailing parenthetical notes and common trailing phrases
-  s = s.replace(/\s*\(.*?\)\s*$/, '').trim();
-  s = s.replace(/,?\s*(to taste|or to taste|as needed|as required)$/i, '').trim();
+  const substitutions = [];
+
+  // Extract "sub"/"substitute"/"alt"/"alternative" substitutions
+  s = s.replace(/,?\s*\b(?:sub(?:stitute)?|alt(?:ernative)?)\b[:\s]+(.+)$/i, (_, rest) => {
+    substitutions.push(rest.trim());
+    return '';
+  }).trim();
+
+  // Extract parenthetical "(or ...)" substitutions
+  s = s.replace(/\s*\(\s*or\s+([^)]+)\)/gi, (_, sub) => {
+    substitutions.push(sub.trim());
+    return '';
+  }).trim();
+
+  // Remove remaining parenthetical notes
+  s = s.replace(/\s*\([^)]*\)/g, '').trim();
+
+  // Remove trailing "to taste" / "as needed" etc.
+  s = s.replace(/,?\s*(?:to taste|or to taste|as needed|as required)$/i, '').trim();
+
+  if (!s) return null;
 
   let qty = '';
   let rest = s;
 
-  // Match leading quantity: mixed number (1 1/2), fraction (1/2), or decimal/integer
-  const qtyMatch = rest.match(/^(\d+\s+\d+\/\d+|\d+\/\d+|\d*\.?\d+)\s*/);
-  if (qtyMatch) {
-    qty = qtyMatch[1].trim();
-    rest = rest.slice(qtyMatch[0].length);
-  } else if (/^an?\s+/i.test(rest)) {
-    qty = '1';
-    rest = rest.replace(/^an?\s+/i, '');
+  // Try "X to Y" numeric range (e.g. "1 to 2 cups")
+  const numToRangeRe = new RegExp(`^(${QTY_PAT})\\s+to\\s+(${QTY_PAT})(?=\\s|$)`, 'i');
+  const numToRange = rest.match(numToRangeRe);
+  if (numToRange) {
+    qty = `${numToRange[1].trim()} to ${numToRange[2].trim()}`;
+    rest = rest.slice(numToRange[0].length).trim();
+  } else {
+    // Try "X-Y" hyphen range (e.g. "2-3 cups"), requires trailing space so we don't eat a fraction
+    const hyphenRangeRe = new RegExp(`^(${QTY_PAT})\\s*-\\s*(${QTY_PAT})(?=\\s|$)`);
+    const hyphenRange = rest.match(hyphenRangeRe);
+    if (hyphenRange) {
+      qty = `${hyphenRange[1].trim()}-${hyphenRange[2].trim()}`;
+      rest = rest.slice(hyphenRange[0].length).trim();
+    } else {
+      // Regular single quantity
+      const qtyMatch = rest.match(/^(\d+\s+\d+\/\d+|\d+\/\d+|\d*\.?\d+)\s*/);
+      if (qtyMatch) {
+        qty = qtyMatch[1].trim();
+        rest = rest.slice(qtyMatch[0].length);
+      } else if (/^an?\s+/i.test(rest)) {
+        qty = '1';
+        rest = rest.replace(/^an?\s+/i, '');
+      }
+    }
   }
 
   // Match unit (first word if it's a known unit)
@@ -223,16 +297,110 @@ function parseIngredientLine(line) {
     rest = rest.slice(firstWord.length).trim();
   }
 
-  // Strip "of" connector (e.g. "2 cups of flour" → name = "flour")
+  // Strip "of" connector
   rest = rest.replace(/^of\s+/i, '');
+
+  // Detect " or <substitution>" in the remaining name
+  const orMatch = rest.match(/^(.+?)\s+or\s+(.+)$/i);
+  if (orMatch) {
+    substitutions.push(orMatch[2].trim());
+    rest = orMatch[1].trim();
+  } else {
+    rest = rest.trim();
+  }
 
   const name = rest.trim();
   if (!name) return null;
-  return { qty, unit, name };
+
+  return { qty, unit, name, ...(substitutions.length ? { substitutions } : {}) };
 }
 
 function parseIngredientBlock(text) {
-  return text.split('\n').map(parseIngredientLine).filter(Boolean);
+  const results = [];
+  for (const line of text.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+
+    // Don't comma-split lines that have substitution markers
+    const hasSubMarker = /,?\s*\b(?:sub(?:stitute)?|alt(?:ernative)?)\b/i.test(trimmed);
+
+    if (!hasSubMarker && trimmed.includes(',')) {
+      const parts = trimmed.split(',').map(p => p.trim()).filter(Boolean);
+      // Only split if every part starts with a quantity (avoids splitting "flour, sifted")
+      const allHaveQty = parts.length > 1 && parts.every(p =>
+        /^[\d\u00BD\u2153\u2154\u00BC\u00BE\u215B]/.test(p) ||
+        /^an?\s/i.test(p) ||
+        /^[-\u2013\u2014\u2022*\u00B7]\s*\d/.test(p)
+      );
+      if (allHaveQty) {
+        const parsed = parts.map(parseIngredientLine).filter(Boolean);
+        if (parsed.length > 1) {
+          results.push(...parsed);
+          continue;
+        }
+      }
+    }
+
+    const parsed = parseIngredientLine(trimmed);
+    if (parsed) results.push(parsed);
+  }
+  return results;
+}
+
+// ============================================================
+// Substitutions modal
+// ============================================================
+function showSubstitutionsModal(ingredient, shoppingItemId = null) {
+  document.querySelector('.subs-modal-overlay')?.remove();
+
+  const subs = ingredient.substitutions || [];
+  if (!subs.length) return;
+
+  const overlay = document.createElement('div');
+  overlay.className = 'subs-modal-overlay';
+
+  const modal = document.createElement('div');
+  modal.className = 'subs-modal';
+
+  const subsHtml = subs.map((sub, i) => `
+    <div class="subs-item${shoppingItemId ? ' subs-item-interactive' : ''}" data-index="${i}">
+      ${shoppingItemId
+        ? `<div class="subs-check-box"><span class="subs-check-mark">&#10003;</span></div>`
+        : `<span class="subs-bullet">&#8250;</span>`}
+      <span class="subs-item-name">${escHtml(sub)}</span>
+    </div>
+  `).join('');
+
+  modal.innerHTML = `
+    <div class="subs-modal-header">
+      <div class="subs-modal-title">${escHtml(ingredient.name)}</div>
+      <div class="subs-modal-subtitle">Substitutions</div>
+    </div>
+    <div class="subs-modal-body">${subsHtml}</div>
+    <div class="subs-modal-footer">
+      <button class="subs-close-btn">Close</button>
+    </div>`;
+
+  overlay.appendChild(modal);
+  document.body.appendChild(overlay);
+
+  modal.querySelector('.subs-close-btn').addEventListener('click', () => overlay.remove());
+  overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+
+  if (shoppingItemId) {
+    modal.querySelectorAll('.subs-item').forEach(itemEl => {
+      itemEl.addEventListener('click', async () => {
+        const sub = subs[parseInt(itemEl.dataset.index)];
+        try {
+          await updateDoc(doc(db, 'shoppingList', shoppingItemId), { checked: true, substitutedWith: sub });
+          overlay.remove();
+          showToast(`Using: ${sub}`);
+        } catch (err) {
+          console.error(err);
+        }
+      });
+    });
+  }
 }
 
 // ============================================================
@@ -274,7 +442,9 @@ function showView(viewId) {
   fab.classList.toggle('hidden', viewId !== 'recipes');
 
   document.querySelectorAll('.nav-btn').forEach(btn => {
-    btn.classList.toggle('active', btn.dataset.view === (viewId === 'recipes' || viewId === 'detail' || viewId === 'edit' ? 'recipes' : 'shopping'));
+    btn.classList.toggle('active', btn.dataset.view === (
+      viewId === 'recipes' || viewId === 'detail' || viewId === 'edit' ? 'recipes' : 'shopping'
+    ));
   });
 }
 
@@ -297,7 +467,7 @@ function navigateTo(view, id = null) {
     renderRecipeDetail(id);
     showView('recipe-detail');
   } else if (view === 'edit') {
-    state.editingRecipeId = id; // null = new
+    state.editingRecipeId = id;
     renderRecipeEdit(id);
     showView('recipe-edit');
   } else if (view === 'shopping') {
@@ -355,14 +525,6 @@ function renderRecipeDetail(id) {
   });
 
   const view = $('view-recipe-detail');
-  const ingHtml = (recipe.ingredients || []).map(ing => {
-    const { qty, name } = formatIngredientDisplay(ing.qty, ing.unit, ing.name);
-    return `<div class="ingredient-item">
-      <span class="ingredient-qty">${escHtml(qty)}</span>
-      <span class="ingredient-name">${escHtml(name)}</span>
-    </div>`;
-  }).join('');
-
   view.innerHTML = `
     <div class="detail-hero">
       <div class="detail-title">${escHtml(recipe.title)}</div>
@@ -370,8 +532,8 @@ function renderRecipeDetail(id) {
     </div>
     <div class="detail-section">
       <div class="section-title">Ingredients</div>
-      <div class="ingredient-list">
-        ${ingHtml || '<p style="color:var(--color-text-secondary);font-size:14px">No ingredients added.</p>'}
+      <div class="ingredient-list" id="detail-ingredient-list">
+        ${!(recipe.ingredients?.length) ? '<p style="color:var(--color-text-secondary);font-size:14px">No ingredients added.</p>' : ''}
       </div>
     </div>
     <div class="detail-actions">
@@ -379,6 +541,25 @@ function renderRecipeDetail(id) {
         ${isAdded ? '&#10003; In Shopping List' : '&#43; Add to Shopping List'}
       </button>
     </div>`;
+
+  const ingList = $('detail-ingredient-list');
+  for (const ing of (recipe.ingredients || [])) {
+    const { qty, name } = formatIngredientDisplay(ing.qty, ing.unit, ing.name);
+    const hasSubs = (ing.substitutions || []).length > 0;
+    const el = document.createElement('div');
+    el.className = 'ingredient-item';
+    el.innerHTML = `
+      <span class="ingredient-qty">${escHtml(qty)}</span>
+      <span class="ingredient-name">${escHtml(name)}</span>
+      ${hasSubs ? `<button class="ing-chevron" aria-label="Show substitutions">&#8250;</button>` : ''}`;
+    if (hasSubs) {
+      el.querySelector('.ing-chevron').addEventListener('click', e => {
+        e.stopPropagation();
+        showSubstitutionsModal(ing);
+      });
+    }
+    ingList.appendChild(el);
+  }
 
   $('add-to-shopping-btn').addEventListener('click', () => addRecipeToShoppingList(id));
 }
@@ -433,9 +614,10 @@ function renderRecipeEdit(id) {
 
   const editor = $('ingredients-editor');
 
-  function addIngredientRow(qty = '', unit = '', name = '') {
+  function addIngredientRow(qty = '', unit = '', name = '', substitutions = []) {
     const row = document.createElement('div');
     row.className = 'ingredient-row';
+    row.dataset.substitutions = JSON.stringify(substitutions);
     row.innerHTML = `
       <input class="ing-qty" type="text" inputmode="decimal" placeholder="qty" value="${escHtml(qty)}" />
       <span class="ing-sep">&middot;</span>
@@ -449,7 +631,7 @@ function renderRecipeEdit(id) {
 
   const ingredients = recipe?.ingredients || [];
   if (ingredients.length) {
-    ingredients.forEach(ing => addIngredientRow(ing.qty, ing.unit, ing.name));
+    ingredients.forEach(ing => addIngredientRow(ing.qty, ing.unit, ing.name, ing.substitutions || []));
   } else {
     addIngredientRow();
   }
@@ -460,7 +642,6 @@ function renderRecipeEdit(id) {
     rows[rows.length - 1].querySelector('.ing-name').focus();
   });
 
-  // Ingredient entry mode toggle
   let currentMode = 'manual';
   document.querySelectorAll('.ing-mode-btn').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -468,25 +649,28 @@ function renderRecipeEdit(id) {
       if (newMode === currentMode) return;
 
       if (newMode === 'auto') {
-        // Serialize current manual rows into the textarea
         const rows = editor.querySelectorAll('.ingredient-row');
         const lines = [];
         for (const row of rows) {
           const q = row.querySelector('.ing-qty').value.trim();
           const u = row.querySelector('.ing-unit').value.trim();
           const n = row.querySelector('.ing-name').value.trim();
-          if (n) lines.push([q, u, n].filter(Boolean).join(' '));
+          const subs = JSON.parse(row.dataset.substitutions || '[]');
+          if (n) {
+            let line = [q, u, n].filter(Boolean).join(' ');
+            if (subs.length) line += ` (or ${subs.join(', or ')})`;
+            lines.push(line);
+          }
         }
         $('ing-auto-text').value = lines.join('\n');
         $('ing-manual-section').classList.add('hidden');
         $('ing-auto-section').classList.remove('hidden');
         $('ing-auto-text').focus();
       } else {
-        // Parse textarea content into manual rows
         const parsed = parseIngredientBlock($('ing-auto-text').value);
         editor.innerHTML = '';
         if (parsed.length) {
-          parsed.forEach(ing => addIngredientRow(ing.qty, ing.unit, ing.name));
+          parsed.forEach(ing => addIngredientRow(ing.qty, ing.unit, ing.name, ing.substitutions || []));
           showToast(`${parsed.length} ingredient${parsed.length !== 1 ? 's' : ''} parsed`);
         } else {
           addIngredientRow();
@@ -503,7 +687,6 @@ function renderRecipeEdit(id) {
   });
 
   $('btn-save-recipe').addEventListener('click', () => saveRecipe(id));
-
   if (!isNew) {
     $('btn-delete-recipe').addEventListener('click', () => deleteRecipe(id));
   }
@@ -519,7 +702,6 @@ function renderShoppingList() {
   setHeader({
     title: 'Shopping List',
     actions: [
-      ...(state.shoppingList.length > 0 ? [{ label: 'Copy', handler: copyShoppingList }] : []),
       ...(state.shoppingList.length > 0 ? [{ label: 'Clear', handler: clearShoppingList, cls: 'danger' }] : []),
     ],
   });
@@ -535,24 +717,52 @@ function renderShoppingList() {
     return;
   }
 
-  view.innerHTML = '<div class="shopping-items" id="shopping-items"></div>';
+  view.innerHTML = `
+    <div class="shopping-copy-bar">
+      <button class="copy-btn" id="btn-copy-simple">Simple copy</button>
+      <button class="copy-btn copy-btn-full" id="btn-copy-full">Copy with measurements</button>
+    </div>
+    <div class="shopping-items" id="shopping-items"></div>`;
+
+  $('btn-copy-simple').addEventListener('click', copyShoppingListSimple);
+  $('btn-copy-full').addEventListener('click', copyShoppingList);
+
   const container = $('shopping-items');
 
   const renderItem = (item) => {
     const el = document.createElement('div');
     el.className = `shopping-item${item.checked ? ' checked' : ''}`;
     const qtyDisplay = formatShoppingItem(item);
+    const hasSubs = (item.substitutions || []).length > 0;
+    const substitutedWith = item.substitutedWith || null;
     const hasMultipleUnits = item.quantities.length > 1;
+
     el.innerHTML = `
-      <div class="check-box">
-        <span class="check-mark">&#10003;</span>
+      <div class="check-zone">
+        <div class="check-box">
+          <span class="check-mark">&#10003;</span>
+        </div>
       </div>
       <div class="shopping-item-text">
         <div class="shopping-item-qty">${escHtml(qtyDisplay)}</div>
         <div class="shopping-item-name">${escHtml(item.name)}</div>
-        ${hasMultipleUnits ? `<div class="shopping-item-note">combined from multiple recipes</div>` : ''}
-      </div>`;
-    el.addEventListener('click', () => toggleShoppingItem(item.id, !item.checked));
+        ${substitutedWith ? `<div class="shopping-item-note">using: ${escHtml(substitutedWith)}</div>` : ''}
+        ${hasMultipleUnits && !substitutedWith ? `<div class="shopping-item-note">combined from multiple recipes</div>` : ''}
+      </div>
+      ${hasSubs ? `<button class="item-chevron" aria-label="Show substitutions">&#8250;</button>` : ''}`;
+
+    el.querySelector('.check-zone').addEventListener('click', e => {
+      e.stopPropagation();
+      toggleShoppingItem(item.id, !item.checked);
+    });
+
+    if (hasSubs) {
+      el.querySelector('.item-chevron').addEventListener('click', e => {
+        e.stopPropagation();
+        showSubstitutionsModal(item, item.id);
+      });
+    }
+
     container.appendChild(el);
   };
 
@@ -570,7 +780,6 @@ function renderShoppingList() {
 // Firebase: Recipes CRUD
 // ============================================================
 function startListeners() {
-  // Recipes listener
   unsubRecipes = onSnapshot(
     query(collection(db, 'recipes'), orderBy('createdAt', 'desc')),
     (snap) => {
@@ -581,7 +790,6 @@ function startListeners() {
     (err) => console.error('Recipes listener error:', err)
   );
 
-  // Shopping list listener
   unsubShopping = onSnapshot(
     query(collection(db, 'shoppingList'), orderBy('order', 'asc')),
     (snap) => {
@@ -591,7 +799,6 @@ function startListeners() {
     (err) => console.error('Shopping listener error:', err)
   );
 
-  // Meta (added recipe IDs)
   unsubMeta = onSnapshot(doc(db, 'meta', 'shoppingMeta'), (snap) => {
     if (snap.exists()) {
       state.addedRecipeIds = new Set(snap.data().addedRecipeIds || []);
@@ -619,6 +826,7 @@ async function saveRecipe(id) {
         qty: row.querySelector('.ing-qty').value.trim(),
         unit: row.querySelector('.ing-unit').value.trim(),
         name,
+        substitutions: JSON.parse(row.dataset.substitutions || '[]'),
       });
     }
   }
@@ -637,7 +845,6 @@ async function saveRecipe(id) {
 
     if (id) {
       await updateDoc(doc(db, 'recipes', id), data);
-      // If this recipe is in the shopping list, recalculate its contribution
       if (state.addedRecipeIds.has(id)) {
         await rebuildShoppingListContribution(id, ingredients);
       }
@@ -659,7 +866,6 @@ async function deleteRecipe(id) {
   if (!confirm('Delete this recipe?')) return;
   try {
     await deleteDoc(doc(db, 'recipes', id));
-    // Remove from shopping list if present
     if (state.addedRecipeIds.has(id)) {
       await removeRecipeFromShoppingList(id);
     }
@@ -699,13 +905,11 @@ async function addRecipeToShoppingList(recipeId) {
 
 async function removeRecipeFromShoppingList(recipeId) {
   const newAddedIds = [...state.addedRecipeIds].filter(id => id !== recipeId);
-  // Rebuild shopping list from scratch using remaining added recipes
   let items = [];
   for (const rId of newAddedIds) {
     const recipe = state.recipes.find(r => r.id === rId);
     if (recipe) items = mergeIngredients(items, recipe.ingredients || [], rId);
   }
-  // Preserve checked state
   items = items.map(item => {
     const existing = state.shoppingList.find(e => e.normalizedName === item.normalizedName);
     return { ...item, checked: existing?.checked || false };
@@ -730,21 +934,17 @@ async function rebuildShoppingListContribution(recipeId, newIngredients) {
 async function writeShoppingList(items, addedRecipeIds) {
   const batch = writeBatch(db);
 
-  // Delete existing shopping list docs
   for (const item of state.shoppingList) {
     batch.delete(doc(db, 'shoppingList', item.id));
   }
 
-  // Write new items
   items.forEach((item, i) => {
     const ref = doc(collection(db, 'shoppingList'));
     const { id: _id, ...data } = item;
     batch.set(ref, { ...data, order: i });
   });
 
-  // Update meta
   batch.set(doc(db, 'meta', 'shoppingMeta'), { addedRecipeIds });
-
   await batch.commit();
 }
 
@@ -771,12 +971,31 @@ async function clearShoppingList() {
   }
 }
 
+// Copy with full measurements (existing behaviour)
 function copyShoppingList() {
   const unchecked = state.shoppingList.filter(i => !i.checked);
   if (!unchecked.length) { showToast('Nothing to copy (all checked off)'); return; }
   const text = unchecked.map(item => {
     const qty = formatShoppingItem(item);
     return `${qty} ${item.name}`;
+  }).join('\n');
+  navigator.clipboard.writeText(text).then(
+    () => showToast('Copied to clipboard'),
+    () => showToast('Could not copy')
+  );
+}
+
+// Simple copy: name-only for measured items, quantity + name for countable items
+function copyShoppingListSimple() {
+  const unchecked = state.shoppingList.filter(i => !i.checked);
+  if (!unchecked.length) { showToast('Nothing to copy (all checked off)'); return; }
+  const text = unchecked.map(item => {
+    const hasMeasurementUnit = item.quantities.some(q => q.unit && q.unit.trim() !== '');
+    if (hasMeasurementUnit) {
+      return item.name;
+    }
+    const qty = formatShoppingItem(item);
+    return qty ? `${qty} ${item.name}` : item.name;
   }).join('\n');
   navigator.clipboard.writeText(text).then(
     () => showToast('Copied to clipboard'),
@@ -811,12 +1030,10 @@ function initApp() {
     return;
   }
 
-  // Register service worker
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('./sw.js').catch(() => {});
   }
 
-  // Wire up navigation buttons
   $('back-btn').addEventListener('click', goBack);
   $('fab-add').addEventListener('click', () => navigateTo('edit', null));
 
@@ -828,7 +1045,6 @@ function initApp() {
     });
   });
 
-  // Start Firestore listeners and show initial view
   startListeners();
   navigateTo('recipes');
 }

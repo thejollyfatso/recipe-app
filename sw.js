@@ -1,12 +1,7 @@
-const CACHE_NAME = 'mamas-kitchen-v1';
+const CACHE_NAME = 'mamas-kitchen-v3';
 const ASSETS = [
   './',
   './index.html',
-  './style.css',
-  './app.js',
-  './firebase-config.js',
-  './manifest.json',
-  './icon.svg',
 ];
 
 self.addEventListener('install', (e) => {

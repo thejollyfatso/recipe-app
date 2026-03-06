@@ -315,6 +315,27 @@ function parseIngredientLine(rawLine) {
   return { qty, unit, name, ...(substitutions.length ? { substitutions } : {}) };
 }
 
+// Split a string on commas that are not inside parentheses and not between digits.
+function splitOnTopLevelCommas(str) {
+  const parts = [];
+  let depth = 0;
+  let start = 0;
+  for (let i = 0; i < str.length; i++) {
+    const ch = str[i];
+    if (ch === '(') { depth++; continue; }
+    if (ch === ')') { depth--; continue; }
+    if (ch === ',' && depth === 0) {
+      const segment = str.slice(start, i);
+      // Skip number commas: digit before and digit after (e.g. "1,000")
+      if (/\d\s*$/.test(segment) && /^\s*\d/.test(str.slice(i + 1))) continue;
+      parts.push(segment.trim());
+      start = i + 1;
+    }
+  }
+  parts.push(str.slice(start).trim());
+  return parts.filter(Boolean);
+}
+
 function parseIngredientBlock(text) {
   const results = [];
   for (const line of text.split('\n')) {
@@ -324,17 +345,11 @@ function parseIngredientBlock(text) {
     // Don't comma-split lines that have substitution markers
     const hasSubMarker = /,?\s*\b(?:sub(?:stitute)?|alt(?:ernative)?)\b/i.test(trimmed);
 
-    if (!hasSubMarker && trimmed.includes(',')) {
-      const parts = trimmed.split(',').map(p => p.trim()).filter(Boolean);
-      // Only split if every part starts with a quantity (avoids splitting "flour, sifted")
-      const allHaveQty = parts.length > 1 && parts.every(p =>
-        /^[\d\u00BD\u2153\u2154\u00BC\u00BE\u215B]/.test(p) ||
-        /^an?\s/i.test(p) ||
-        /^[-\u2013\u2014\u2022*\u00B7]\s*\d/.test(p)
-      );
-      if (allHaveQty) {
+    if (!hasSubMarker) {
+      const parts = splitOnTopLevelCommas(trimmed);
+      if (parts.length > 1) {
         const parsed = parts.map(parseIngredientLine).filter(Boolean);
-        if (parsed.length > 1) {
+        if (parsed.length > 0) {
           results.push(...parsed);
           continue;
         }

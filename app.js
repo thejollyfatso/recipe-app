@@ -222,6 +222,33 @@ const INGREDIENT_UNITS = new Set([
   'dash','dashes','handful','handfuls','sheet','sheets',
 ]);
 
+// Prep/state descriptors that appear after a comma but are NOT separate ingredients.
+// Used to filter comma-split parts that have no qty/unit.
+const PREP_DESCRIPTORS = new Set([
+  // Cutting / breaking down
+  'chopped','roughly chopped','finely chopped','coarsely chopped',
+  'diced','finely diced','small diced','medium diced','large diced',
+  'minced','sliced','thinly sliced','thickly sliced','diagonally sliced',
+  'julienned','shredded','grated','finely grated','coarsely grated',
+  'cubed','roughly cubed','crumbled','torn','halved','quartered',
+  'trimmed','cut','scored','crushed','lightly crushed','smashed',
+  'peeled','unpeeled','deseeded','seeded','pitted','cored','hulled',
+  'zested','juiced','rinsed','drained','squeezed',
+  // Cooking state
+  'cooked','uncooked','raw','fried','pan-fried','deep-fried',
+  'baked','roasted','grilled','broiled','steamed','blanched',
+  'toasted','lightly toasted','caramelised','caramelized',
+  'softened','melted','browned','lightly browned',
+  // Prep state
+  'beaten','lightly beaten','whisked','sifted','packed','loosely packed',
+  'heaped','heaping','leveled','levelled','divided','separated',
+  'soaked','soaked overnight','strained','pressed','patted dry',
+  'thawed','frozen','chilled','cooled','warmed','room temperature',
+  // Misc modifiers
+  'optional','fresh','dried','ground','whole','boneless','skinless',
+  'boneless and skinless','skin-on','bone-in','lean','fat trimmed',
+]);
+
 // Reusable qty sub-pattern for range matching
 const QTY_PAT = '(?:\\d+\\s+\\d+\\/\\d+|\\d+\\/\\d+|\\d+(?:\\.\\d+)?)';
 
@@ -348,7 +375,12 @@ function parseIngredientBlock(text) {
     if (!hasSubMarker) {
       const parts = splitOnTopLevelCommas(trimmed);
       if (parts.length > 1) {
-        const parsed = parts.map(parseIngredientLine).filter(Boolean);
+        const parsed = parts.map(parseIngredientLine).filter(p => {
+          if (!p) return false;
+          // Drop parts with no qty and no unit whose name is a known prep descriptor
+          if (!p.qty && !p.unit && PREP_DESCRIPTORS.has(p.name.toLowerCase())) return false;
+          return true;
+        });
         if (parsed.length > 0) {
           results.push(...parsed);
           continue;

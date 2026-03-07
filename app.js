@@ -29,6 +29,7 @@ const state = {
   recipes: [],
   shoppingList: [],
   addedRecipeIds: new Set(),
+  manualItems: [],
   currentView: 'recipes',
   viewingRecipeId: null,
   editingRecipeId: null,
@@ -196,6 +197,15 @@ function mergeIngredients(existingItems, newIngredients, recipeId) {
   }
 
   return result;
+}
+
+function buildShoppingListFromSources(manualItems, addedIds) {
+  let items = mergeIngredients([], manualItems, '__manual__');
+  for (const rId of addedIds) {
+    const recipe = state.recipes.find(r => r.id === rId);
+    if (recipe) items = mergeIngredients(items, recipe.ingredients || [], rId);
+  }
+  return items;
 }
 
 function formatShoppingItem(item) {
@@ -755,72 +765,149 @@ function renderShoppingList() {
 
   const view = $('view-shopping');
 
+  const addBarHtml = `
+    <div class="add-manual-bar">
+      <input type="text" class="add-manual-input" id="add-manual-input"
+        placeholder="Add item (e.g. 2 cups milk)" autocomplete="off" />
+      <button class="add-manual-btn" id="add-manual-btn">Add</button>
+    </div>`;
+
   if (!state.shoppingList.length) {
     view.innerHTML = `
       <div class="shopping-empty">
         <div class="empty-icon">&#128722;</div>
-        <p>Your shopping list is empty.<br>Add a recipe to get started.</p>
-      </div>`;
-    return;
-  }
+        <p>Your shopping list is empty.<br>Add a recipe or type an item below.</p>
+      </div>
+      ${addBarHtml}`;
+  } else {
+    view.innerHTML = `
+      <div class="shopping-copy-bar">
+        <button class="copy-btn" id="btn-copy-simple">Simple copy</button>
+        <button class="copy-btn copy-btn-full" id="btn-copy-full">Copy with measurements</button>
+      </div>
+      <div class="shopping-items" id="shopping-items"></div>
+      ${addBarHtml}`;
 
-  view.innerHTML = `
-    <div class="shopping-copy-bar">
-      <button class="copy-btn" id="btn-copy-simple">Simple copy</button>
-      <button class="copy-btn copy-btn-full" id="btn-copy-full">Copy with measurements</button>
-    </div>
-    <div class="shopping-items" id="shopping-items"></div>`;
+    $('btn-copy-simple').addEventListener('click', copyShoppingListSimple);
+    $('btn-copy-full').addEventListener('click', copyShoppingList);
 
-  $('btn-copy-simple').addEventListener('click', copyShoppingListSimple);
-  $('btn-copy-full').addEventListener('click', copyShoppingList);
+    const container = $('shopping-items');
 
-  const container = $('shopping-items');
+    const renderItem = (item) => {
+      const el = document.createElement('div');
+      el.className = `shopping-item${item.checked ? ' checked' : ''}`;
+      const qtyDisplay = formatShoppingItem(item);
+      const hasSubs = (item.substitutions || []).length > 0;
+      const substitutedWith = item.substitutedWith || null;
+      const hasMultipleUnits = item.quantities.length > 1;
 
-  const renderItem = (item) => {
-    const el = document.createElement('div');
-    el.className = `shopping-item${item.checked ? ' checked' : ''}`;
-    const qtyDisplay = formatShoppingItem(item);
-    const hasSubs = (item.substitutions || []).length > 0;
-    const substitutedWith = item.substitutedWith || null;
-    const hasMultipleUnits = item.quantities.length > 1;
-
-    el.innerHTML = `
-      <div class="check-zone">
-        <div class="check-box">
-          <span class="check-mark">&#10003;</span>
+      el.innerHTML = `
+        <div class="check-zone">
+          <div class="check-box">
+            <span class="check-mark">&#10003;</span>
+          </div>
         </div>
-      </div>
-      <div class="shopping-item-text">
-        <div class="shopping-item-qty">${escHtml(qtyDisplay)}</div>
-        <div class="shopping-item-name">${escHtml(item.name)}</div>
-        ${substitutedWith ? `<div class="shopping-item-note">using: ${escHtml(substitutedWith)}</div>` : ''}
-        ${hasMultipleUnits && !substitutedWith ? `<div class="shopping-item-note">combined from multiple recipes</div>` : ''}
-      </div>
-      ${hasSubs ? `<button class="item-chevron" aria-label="Show substitutions">&#8250;</button>` : ''}`;
+        <div class="shopping-item-text">
+          <div class="shopping-item-qty">${escHtml(qtyDisplay)}</div>
+          <div class="shopping-item-name">${escHtml(item.name)}</div>
+          ${substitutedWith ? `<div class="shopping-item-note">using: ${escHtml(substitutedWith)}</div>` : ''}
+          ${hasMultipleUnits && !substitutedWith ? `<div class="shopping-item-note">combined from multiple recipes</div>` : ''}
+        </div>
+        ${hasSubs ? `<button class="item-chevron" aria-label="Show substitutions">&#8250;</button>` : ''}`;
 
-    el.querySelector('.check-zone').addEventListener('click', e => {
-      e.stopPropagation();
-      toggleShoppingItem(item.id, !item.checked);
-    });
-
-    if (hasSubs) {
-      el.querySelector('.item-chevron').addEventListener('click', e => {
+      el.querySelector('.check-zone').addEventListener('click', e => {
         e.stopPropagation();
-        showSubstitutionsModal(item, item.id);
+        toggleShoppingItem(item.id, !item.checked);
       });
+
+      if (hasSubs) {
+        el.querySelector('.item-chevron').addEventListener('click', e => {
+          e.stopPropagation();
+          showSubstitutionsModal(item, item.id);
+        });
+      }
+
+      // Inline qty editing
+      if (!item.checked) {
+        const qtyEl = el.querySelector('.shopping-item-qty');
+        qtyEl.classList.add('qty-editable');
+        qtyEl.addEventListener('click', e => {
+          e.stopPropagation();
+          if (qtyEl.querySelector('input')) return;
+          const currentText = qtyEl.textContent;
+          const input = document.createElement('input');
+          input.className = 'qty-edit-input';
+          input.value = currentText;
+          input.setAttribute('inputmode', 'decimal');
+          qtyEl.textContent = '';
+          qtyEl.appendChild(input);
+          input.focus();
+          input.select();
+
+          let saved = false;
+          const save = async () => {
+            if (saved) return;
+            saved = true;
+            const val = input.value.trim();
+            if (!val || val === currentText) {
+              qtyEl.textContent = currentText;
+              return;
+            }
+            qtyEl.textContent = val;
+            const parsed = parseIngredientLine(`${val} ${item.name}`);
+            let newQty, newUnit;
+            if (parsed) {
+              newQty = parseQtyUpper(parsed.qty) ?? null;
+              newUnit = parsed.unit || '';
+            } else {
+              newQty = parseQty(val);
+              newUnit = '';
+            }
+            try {
+              await updateDoc(doc(db, 'shoppingList', item.id), { quantities: [{ qty: newQty, unit: newUnit }] });
+            } catch (err) {
+              console.error(err);
+              showToast('Error updating quantity');
+            }
+          };
+
+          input.addEventListener('blur', save);
+          input.addEventListener('keydown', e => {
+            if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+            if (e.key === 'Escape') { saved = true; qtyEl.textContent = currentText; }
+          });
+        });
+      }
+
+      container.appendChild(el);
+    };
+
+    unchecked.forEach(renderItem);
+    if (checked.length && unchecked.length) {
+      const divider = document.createElement('div');
+      divider.className = 'divider';
+      divider.style.margin = '8px 0';
+      container.appendChild(divider);
     }
-
-    container.appendChild(el);
-  };
-
-  unchecked.forEach(renderItem);
-  if (checked.length && unchecked.length) {
-    const divider = document.createElement('div');
-    divider.className = 'divider';
-    divider.style.margin = '8px 0';
-    container.appendChild(divider);
+    checked.forEach(renderItem);
   }
-  checked.forEach(renderItem);
+
+  // Manual entry bar handlers
+  const manualInput = $('add-manual-input');
+  const manualBtn = $('add-manual-btn');
+  const doAdd = async () => {
+    const text = manualInput.value.trim();
+    if (!text) return;
+    manualBtn.disabled = true;
+    manualInput.disabled = true;
+    await addManualItem(text);
+    manualInput.value = '';
+    manualBtn.disabled = false;
+    manualInput.disabled = false;
+    manualInput.focus();
+  };
+  manualBtn.addEventListener('click', doAdd);
+  manualInput.addEventListener('keydown', e => { if (e.key === 'Enter') doAdd(); });
 }
 
 // ============================================================
@@ -849,8 +936,10 @@ function startListeners() {
   unsubMeta = onSnapshot(doc(db, 'meta', 'shoppingMeta'), (snap) => {
     if (snap.exists()) {
       state.addedRecipeIds = new Set(snap.data().addedRecipeIds || []);
+      state.manualItems = snap.data().manualItems || [];
     } else {
       state.addedRecipeIds = new Set();
+      state.manualItems = [];
     }
     if (state.currentView === 'detail') renderRecipeDetail(state.viewingRecipeId);
   });
@@ -949,8 +1038,13 @@ async function addRecipeToShoppingList(recipeId) {
   if (btn) { btn.disabled = true; btn.textContent = 'Adding...'; }
 
   try {
-    const merged = mergeIngredients(state.shoppingList, recipe.ingredients || [], recipeId);
-    await writeShoppingList(merged, [...state.addedRecipeIds, recipeId]);
+    const newAddedIds = [...state.addedRecipeIds, recipeId];
+    let merged = buildShoppingListFromSources(state.manualItems, newAddedIds);
+    merged = merged.map(item => {
+      const existing = state.shoppingList.find(e => e.normalizedName === item.normalizedName);
+      return { ...item, checked: existing?.checked || false };
+    });
+    await writeShoppingList(merged, newAddedIds);
     showToast(`"${recipe.title}" added to list`);
     renderRecipeDetail(recipeId);
   } catch (err) {
@@ -962,11 +1056,7 @@ async function addRecipeToShoppingList(recipeId) {
 
 async function removeRecipeFromShoppingList(recipeId) {
   const newAddedIds = [...state.addedRecipeIds].filter(id => id !== recipeId);
-  let items = [];
-  for (const rId of newAddedIds) {
-    const recipe = state.recipes.find(r => r.id === rId);
-    if (recipe) items = mergeIngredients(items, recipe.ingredients || [], rId);
-  }
+  let items = buildShoppingListFromSources(state.manualItems, newAddedIds);
   items = items.map(item => {
     const existing = state.shoppingList.find(e => e.normalizedName === item.normalizedName);
     return { ...item, checked: existing?.checked || false };
@@ -976,7 +1066,7 @@ async function removeRecipeFromShoppingList(recipeId) {
 
 async function rebuildShoppingListContribution(recipeId, newIngredients) {
   const addedIds = [...state.addedRecipeIds];
-  let items = [];
+  let items = mergeIngredients([], state.manualItems, '__manual__');
   for (const rId of addedIds) {
     const ings = rId === recipeId ? newIngredients : state.recipes.find(r => r.id === rId)?.ingredients || [];
     items = mergeIngredients(items, ings, rId);
@@ -988,7 +1078,7 @@ async function rebuildShoppingListContribution(recipeId, newIngredients) {
   await writeShoppingList(items, addedIds);
 }
 
-async function writeShoppingList(items, addedRecipeIds) {
+async function writeShoppingList(items, addedRecipeIds, manualItems = state.manualItems) {
   const batch = writeBatch(db);
 
   for (const item of state.shoppingList) {
@@ -1001,7 +1091,7 @@ async function writeShoppingList(items, addedRecipeIds) {
     batch.set(ref, { ...data, order: i });
   });
 
-  batch.set(doc(db, 'meta', 'shoppingMeta'), { addedRecipeIds });
+  batch.set(doc(db, 'meta', 'shoppingMeta'), { addedRecipeIds, manualItems });
   await batch.commit();
 }
 
@@ -1020,12 +1110,26 @@ async function clearShoppingList() {
     for (const item of state.shoppingList) {
       batch.delete(doc(db, 'shoppingList', item.id));
     }
-    batch.set(doc(db, 'meta', 'shoppingMeta'), { addedRecipeIds: [] });
+    batch.set(doc(db, 'meta', 'shoppingMeta'), { addedRecipeIds: [], manualItems: [] });
     await batch.commit();
   } catch (err) {
     console.error(err);
     showToast('Error clearing list');
   }
+}
+
+async function addManualItem(text) {
+  const parsed = parseIngredientLine(text);
+  if (!parsed || !parsed.name) { showToast('Could not parse ingredient'); return; }
+
+  const newManualItems = [...state.manualItems, { qty: parsed.qty, unit: parsed.unit, name: parsed.name }];
+  let items = buildShoppingListFromSources(newManualItems, [...state.addedRecipeIds]);
+  items = items.map(item => {
+    const existing = state.shoppingList.find(e => e.normalizedName === item.normalizedName);
+    return { ...item, checked: existing?.checked || false };
+  });
+  await writeShoppingList(items, [...state.addedRecipeIds], newManualItems);
+  showToast(`Added: ${parsed.name}`);
 }
 
 // Copy with full measurements (existing behaviour)

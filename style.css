@@ -1007,3 +1007,81 @@ textarea.form-input {
 }
 
 .subs-close-btn:active { background: var(--color-border); }
+
+/* ============================================================
+   Shopping List – Manual entry bar
+   ============================================================ */
+.add-manual-bar {
+  display: flex;
+  gap: 8px;
+  padding: 12px 16px;
+  padding-bottom: max(12px, env(safe-area-inset-bottom));
+  border-top: 1px solid var(--color-border);
+  background: var(--color-surface);
+  position: sticky;
+  bottom: 0;
+}
+
+.add-manual-input {
+  flex: 1;
+  padding: 10px 14px;
+  background: var(--color-surface-2);
+  border: 1.5px solid var(--color-border);
+  border-radius: var(--radius-md);
+  font-size: 15px;
+  color: var(--color-text);
+  outline: none;
+  font-family: inherit;
+  min-width: 0;
+  transition: border-color 0.15s;
+}
+
+.add-manual-input:focus {
+  border-color: var(--color-primary);
+  background: var(--color-surface);
+}
+
+.add-manual-btn {
+  padding: 10px 16px;
+  background: var(--color-primary);
+  color: white;
+  border: none;
+  border-radius: var(--radius-md);
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+  flex-shrink: 0;
+  transition: background 0.15s;
+}
+
+.add-manual-btn:active { background: var(--color-primary-dark); }
+.add-manual-btn:disabled { background: var(--color-checked); cursor: default; }
+
+/* ============================================================
+   Shopping List – Inline qty editing
+   ============================================================ */
+.qty-editable {
+  cursor: pointer;
+  border-radius: 4px;
+  padding: 1px 3px;
+  margin: -1px -3px;
+  transition: background 0.1s;
+}
+
+.qty-editable:active {
+  background: var(--color-primary-light);
+}
+
+.qty-edit-input {
+  background: var(--color-primary-light);
+  border: 1.5px solid var(--color-primary);
+  border-radius: 4px;
+  color: var(--color-primary);
+  font-size: 13px;
+  font-weight: 600;
+  font-family: inherit;
+  outline: none;
+  padding: 0 4px;
+  width: 80px;
+}

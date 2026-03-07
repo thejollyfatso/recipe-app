@@ -759,34 +759,26 @@ function renderShoppingList() {
   setHeader({
     title: 'Shopping List',
     actions: [
+      { label: '+ Add', handler: showAddItemModal },
       ...(state.shoppingList.length > 0 ? [{ label: 'Clear', handler: clearShoppingList, cls: 'danger' }] : []),
     ],
   });
 
   const view = $('view-shopping');
 
-  const addBarHtml = `
-    <div class="add-manual-bar">
-      <input type="text" class="add-manual-input" id="add-manual-input"
-        placeholder="Add item (e.g. 2 cups milk)" autocomplete="off" />
-      <button class="add-manual-btn" id="add-manual-btn">Add</button>
-    </div>`;
-
   if (!state.shoppingList.length) {
     view.innerHTML = `
       <div class="shopping-empty">
         <div class="empty-icon">&#128722;</div>
-        <p>Your shopping list is empty.<br>Add a recipe or type an item below.</p>
-      </div>
-      ${addBarHtml}`;
+        <p>Your shopping list is empty.<br>Add a recipe or manually add an item.</p>
+      </div>`;
   } else {
     view.innerHTML = `
       <div class="shopping-copy-bar">
         <button class="copy-btn" id="btn-copy-simple">Simple copy</button>
         <button class="copy-btn copy-btn-full" id="btn-copy-full">Copy with measurements</button>
       </div>
-      <div class="shopping-items" id="shopping-items"></div>
-      ${addBarHtml}`;
+      <div class="shopping-items" id="shopping-items"></div>`;
 
     $('btn-copy-simple').addEventListener('click', copyShoppingListSimple);
     $('btn-copy-full').addEventListener('click', copyShoppingList);
@@ -892,22 +884,62 @@ function renderShoppingList() {
     checked.forEach(renderItem);
   }
 
-  // Manual entry bar handlers
-  const manualInput = $('add-manual-input');
-  const manualBtn = $('add-manual-btn');
+}
+
+// ============================================================
+// Add Item Modal
+// ============================================================
+function showAddItemModal() {
+  document.querySelector('.add-item-overlay')?.remove();
+
+  const overlay = document.createElement('div');
+  overlay.className = 'add-item-overlay subs-modal-overlay';
+
+  const modal = document.createElement('div');
+  modal.className = 'subs-modal';
+  modal.innerHTML = `
+    <div class="subs-modal-header">
+      <div class="subs-modal-title">Add Item</div>
+    </div>
+    <div class="subs-modal-body" style="padding: 20px;">
+      <div class="form-group" style="margin-bottom: 0;">
+        <label class="form-label" for="add-item-input">Item</label>
+        <input class="form-input" id="add-item-input" type="text"
+          placeholder="e.g. 2 cups milk" autocomplete="off" />
+      </div>
+    </div>
+    <div class="subs-modal-footer" style="display:flex; gap: 10px;">
+      <button class="btn-secondary" id="add-item-cancel" style="flex:1">Cancel</button>
+      <button class="btn-primary" id="add-item-confirm" style="flex:2">Add to List</button>
+    </div>`;
+
+  overlay.appendChild(modal);
+  document.body.appendChild(overlay);
+
+  const input = modal.querySelector('#add-item-input');
+  const confirmBtn = modal.querySelector('#add-item-confirm');
+  const cancelBtn = modal.querySelector('#add-item-cancel');
+
+  const close = () => overlay.remove();
+
   const doAdd = async () => {
-    const text = manualInput.value.trim();
+    const text = input.value.trim();
     if (!text) return;
-    manualBtn.disabled = true;
-    manualInput.disabled = true;
+    confirmBtn.disabled = true;
+    input.disabled = true;
     await addManualItem(text);
-    manualInput.value = '';
-    manualBtn.disabled = false;
-    manualInput.disabled = false;
-    manualInput.focus();
+    close();
   };
-  manualBtn.addEventListener('click', doAdd);
-  manualInput.addEventListener('keydown', e => { if (e.key === 'Enter') doAdd(); });
+
+  confirmBtn.addEventListener('click', doAdd);
+  cancelBtn.addEventListener('click', close);
+  overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
+  input.addEventListener('keydown', e => {
+    if (e.key === 'Enter') doAdd();
+    if (e.key === 'Escape') close();
+  });
+
+  requestAnimationFrame(() => input.focus());
 }
 
 // ============================================================

@@ -557,6 +557,9 @@ textarea.form-input {
 .ing-remove-btn:active { color: var(--color-danger); }
 .ing-expand-btn.active { color: var(--color-primary); }
 .ing-expand-btn:active { color: var(--color-primary); }
+.ing-star-btn { color: var(--color-checked); }
+.ing-star-btn.active { color: var(--color-primary); }
+.ing-star-btn:active { color: var(--color-primary); }
 
 .ing-opt-btn {
   font-size: 11px;

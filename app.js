@@ -703,7 +703,7 @@ function renderRecipeEdit(id) {
 
   const editor = $('ingredients-editor');
 
-  function addIngredientRow(qty = '', unit = '', name = '', substitutions = [], optional = false) {
+  function addIngredientRow(qty = '', unit = '', name = '', substitutions = [], optional = false, keyIngredient = false) {
     const row = document.createElement('div');
     row.className = 'ingredient-row';
     const [primaryQty, rangeQty] = splitRangeQty(qty);
@@ -716,6 +716,7 @@ function renderRecipeEdit(id) {
         <span class="ing-sep">&middot;</span>
         <input class="ing-name" type="text" placeholder="ingredient name" value="${escHtml(name)}" />
         <button type="button" class="ing-expand-btn${detailsOpen ? ' active' : ''}" aria-label="More options">&#8943;</button>
+        <button type="button" class="ing-star-btn${keyIngredient ? ' active' : ''}" aria-label="Key ingredient">&#9733;</button>
         <button type="button" class="ing-remove-btn" aria-label="Remove">&#215;</button>
       </div>
       <div class="ing-details${detailsOpen ? '' : ' hidden'}">
@@ -725,6 +726,9 @@ function renderRecipeEdit(id) {
         <input class="ing-subs" type="text" placeholder="substitutions (comma-separated)" value="${escHtml(substitutions.join(', '))}" />
       </div>`;
     row.querySelector('.ing-remove-btn').addEventListener('click', () => row.remove());
+    row.querySelector('.ing-star-btn').addEventListener('click', () => {
+      row.querySelector('.ing-star-btn').classList.toggle('active');
+    });
     row.querySelector('.ing-expand-btn').addEventListener('click', () => {
       const details = row.querySelector('.ing-details');
       const btn = row.querySelector('.ing-expand-btn');
@@ -739,7 +743,7 @@ function renderRecipeEdit(id) {
 
   const ingredients = recipe?.ingredients || [];
   if (ingredients.length) {
-    ingredients.forEach(ing => addIngredientRow(ing.qty, ing.unit, ing.name, ing.substitutions || [], !!ing.optional));
+    ingredients.forEach(ing => addIngredientRow(ing.qty, ing.unit, ing.name, ing.substitutions || [], !!ing.optional, !!ing.keyIngredient));
   } else {
     addIngredientRow();
   }
@@ -782,7 +786,7 @@ function renderRecipeEdit(id) {
         const parsed = parseIngredientBlock($('ing-auto-text').value);
         editor.innerHTML = '';
         if (parsed.length) {
-          parsed.forEach(ing => addIngredientRow(ing.qty, ing.unit, ing.name, ing.substitutions || [], !!ing.optional));
+          parsed.forEach(ing => addIngredientRow(ing.qty, ing.unit, ing.name, ing.substitutions || [], !!ing.optional, !!ing.keyIngredient));
           showToast(`${parsed.length} ingredient${parsed.length !== 1 ? 's' : ''} parsed`);
         } else {
           addIngredientRow();
@@ -1055,6 +1059,7 @@ async function saveRecipe(id) {
         name,
         substitutions: row.querySelector('.ing-subs').value.split(',').map(s => s.trim()).filter(Boolean),
         ...(row.querySelector('.ing-opt-btn').classList.contains('active') ? { optional: true } : {}),
+        ...(row.querySelector('.ing-star-btn').classList.contains('active') ? { keyIngredient: true } : {}),
       });
     }
   }

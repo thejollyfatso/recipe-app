@@ -119,6 +119,26 @@ function parseQtyUpper(qtyStr) {
   return parseQty(s);
 }
 
+function splitRangeQty(qtyStr) {
+  if (!qtyStr) return [qtyStr || '', ''];
+  const s = qtyStr.trim();
+  const toRange = s.match(/^(.+?)\s+to\s+(.+)$/i);
+  if (toRange) return [toRange[1].trim(), toRange[2].trim()];
+  const hyphenRange = s.match(/^(.+?)\s*-\s*(\d[\d\s/.]*)$/);
+  if (hyphenRange && parseQty(hyphenRange[1].trim()) !== null) {
+    return [hyphenRange[1].trim(), hyphenRange[2].trim()];
+  }
+  return [s, ''];
+}
+
+function buildRangeQty(primaryQty, rangeQty) {
+  if (!primaryQty || !rangeQty) return primaryQty || '';
+  const low = parseQty(primaryQty);
+  const high = parseQty(rangeQty);
+  if (low === null || high === null) return primaryQty;
+  return low <= high ? `${primaryQty}-${rangeQty}` : `${rangeQty}-${primaryQty}`;
+}
+
 function isRangeQty(qtyStr) {
   if (!qtyStr) return false;
   const s = qtyStr.trim();
@@ -686,10 +706,11 @@ function renderRecipeEdit(id) {
   function addIngredientRow(qty = '', unit = '', name = '', substitutions = [], optional = false) {
     const row = document.createElement('div');
     row.className = 'ingredient-row';
-    const detailsOpen = optional || substitutions.length > 0;
+    const [primaryQty, rangeQty] = splitRangeQty(qty);
+    const detailsOpen = optional || substitutions.length > 0 || !!rangeQty;
     row.innerHTML = `
       <div class="ing-main">
-        <input class="ing-qty" type="text" inputmode="decimal" placeholder="qty" value="${escHtml(qty)}" />
+        <input class="ing-qty" type="text" inputmode="decimal" placeholder="qty" value="${escHtml(primaryQty)}" />
         <span class="ing-sep">&middot;</span>
         <input class="ing-unit" type="text" placeholder="unit" value="${escHtml(unit)}" />
         <span class="ing-sep">&middot;</span>
@@ -699,6 +720,8 @@ function renderRecipeEdit(id) {
       </div>
       <div class="ing-details${detailsOpen ? '' : ' hidden'}">
         <button type="button" class="ing-opt-btn${optional ? ' active' : ''}">optional</button>
+        <span class="ing-range-label">to</span>
+        <input class="ing-qty-range" type="text" inputmode="decimal" placeholder="range" value="${escHtml(rangeQty)}" />
         <input class="ing-subs" type="text" placeholder="substitutions (comma-separated)" value="${escHtml(substitutions.join(', '))}" />
       </div>`;
     row.querySelector('.ing-remove-btn').addEventListener('click', () => row.remove());
@@ -738,12 +761,14 @@ function renderRecipeEdit(id) {
         const lines = [];
         for (const row of rows) {
           const q = row.querySelector('.ing-qty').value.trim();
+          const qRange = row.querySelector('.ing-qty-range').value.trim();
+          const qDisplay = buildRangeQty(q, qRange);
           const u = row.querySelector('.ing-unit').value.trim();
           const n = row.querySelector('.ing-name').value.trim();
           const subs = row.querySelector('.ing-subs').value.split(',').map(s => s.trim()).filter(Boolean);
           const opt = row.querySelector('.ing-opt-btn').classList.contains('active');
           if (n) {
-            let line = [q, u, n].filter(Boolean).join(' ');
+            let line = [qDisplay, u, n].filter(Boolean).join(' ');
             if (subs.length) line += ` (or ${subs.join(', or ')})`;
             if (opt) line += ' (optional)';
             lines.push(line);
@@ -1022,8 +1047,10 @@ async function saveRecipe(id) {
     for (const row of rows) {
       const name = row.querySelector('.ing-name').value.trim();
       if (!name) continue;
+      const primaryQty = row.querySelector('.ing-qty').value.trim();
+      const rangeQty = row.querySelector('.ing-qty-range').value.trim();
       ingredients.push({
-        qty: row.querySelector('.ing-qty').value.trim(),
+        qty: buildRangeQty(primaryQty, rangeQty),
         unit: row.querySelector('.ing-unit').value.trim(),
         name,
         substitutions: row.querySelector('.ing-subs').value.split(',').map(s => s.trim()).filter(Boolean),

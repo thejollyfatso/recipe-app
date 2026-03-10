@@ -536,6 +536,8 @@ textarea.form-input {
 .ing-unit { width: 72px; flex-shrink: 0; }
 .ing-name { flex: 1; }
 .ing-subs { flex: 1; font-size: 13px; color: var(--color-text-secondary); }
+.ing-range-label { font-size: 11px; color: var(--color-text-secondary); flex-shrink: 0; }
+.ing-qty-range { width: 52px; flex-shrink: 0; text-align: center; font-size: 13px; }
 
 .ing-remove-btn, .ing-expand-btn {
   background: none;

@@ -258,10 +258,57 @@ body {
   color: var(--color-text-secondary);
 }
 
+.recipe-card-key-ings {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+  flex-shrink: 0;
+  max-width: 40%;
+}
+
+.recipe-card-key-tag {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--color-primary);
+  background: color-mix(in srgb, var(--color-primary) 12%, transparent);
+  border-radius: 4px;
+  padding: 2px 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
 .recipe-card-arrow {
   color: var(--color-border);
   font-size: 18px;
   flex-shrink: 0;
+}
+
+.sort-toggle-bar {
+  display: flex;
+  justify-content: center;
+  padding: 4px 0 16px;
+}
+
+.recipe-group {
+  margin-bottom: 8px;
+}
+
+.recipe-group-header {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--color-primary);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 8px 4px 6px;
+  border-bottom: 1px solid var(--color-border);
+  margin-bottom: 10px;
+}
+
+.recipe-group-header.recipe-group-other {
+  color: var(--color-text-secondary);
 }
 
 /* FAB */

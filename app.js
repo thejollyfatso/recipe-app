@@ -33,6 +33,7 @@ const state = {
   currentView: 'recipes',
   viewingRecipeId: null,
   editingRecipeId: null,
+  recipeSort: 'alpha',
 };
 
 let unsubRecipes = null;
@@ -567,34 +568,102 @@ function navigateTo(view, id = null) {
 // ============================================================
 // Render: Recipes List
 // ============================================================
+function makeRecipeCard(recipe) {
+  const card = document.createElement('div');
+  card.className = 'recipe-card';
+  const ingCount = recipe.ingredients?.length || 0;
+  const keyIngs = (recipe.ingredients || []).filter(i => i.keyIngredient);
+  const keyStars = keyIngs.length
+    ? `<div class="recipe-card-key-ings">${keyIngs.map(i => `<span class="recipe-card-key-tag">${escHtml(i.name)}</span>`).join('')}</div>`
+    : '';
+  card.innerHTML = `
+    <div class="recipe-card-body">
+      <div class="recipe-card-title">${escHtml(recipe.title)}</div>
+      <div class="recipe-card-meta">${ingCount} ingredient${ingCount !== 1 ? 's' : ''}</div>
+    </div>
+    ${keyStars}
+    <div class="recipe-card-arrow">&#8250;</div>`;
+  card.addEventListener('click', () => navigateTo('detail', recipe.id));
+  return card;
+}
+
+function makeRecipeGrid(recipes) {
+  const grid = document.createElement('div');
+  grid.className = 'recipes-grid';
+  for (const recipe of recipes) grid.appendChild(makeRecipeCard(recipe));
+  return grid;
+}
+
 function renderRecipesList() {
   setHeader({ title: "Mama's Kitchen" });
   const container = $('recipes-list');
+  container.innerHTML = '';
+
+  // Sort toggle
+  const toggleBar = document.createElement('div');
+  toggleBar.className = 'sort-toggle-bar';
+  toggleBar.innerHTML = `
+    <div class="ing-mode-toggle" id="recipe-sort-toggle">
+      <button class="ing-mode-btn${state.recipeSort === 'alpha' ? ' active' : ''}" data-sort="alpha">A–Z</button>
+      <button class="ing-mode-btn${state.recipeSort === 'key-top' ? ' active' : ''}" data-sort="key-top">Top key</button>
+      <button class="ing-mode-btn${state.recipeSort === 'key-repeat' ? ' active' : ''}" data-sort="key-repeat">All keys</button>
+    </div>`;
+  toggleBar.querySelector('#recipe-sort-toggle').addEventListener('click', e => {
+    const btn = e.target.closest('[data-sort]');
+    if (!btn) return;
+    state.recipeSort = btn.dataset.sort;
+    renderRecipesList();
+  });
+  container.appendChild(toggleBar);
+
   if (!state.recipes.length) {
-    container.innerHTML = `
+    container.insertAdjacentHTML('beforeend', `
       <div class="empty-state">
         <div class="empty-icon">&#127859;</div>
         <p>No recipes yet.<br>Tap <strong>+</strong> to add your first one.</p>
-      </div>`;
+      </div>`);
     return;
   }
-  container.innerHTML = '';
-  const grid = document.createElement('div');
-  grid.className = 'recipes-grid';
-  for (const recipe of state.recipes) {
-    const card = document.createElement('div');
-    card.className = 'recipe-card';
-    const ingCount = recipe.ingredients?.length || 0;
-    card.innerHTML = `
-      <div class="recipe-card-body">
-        <div class="recipe-card-title">${escHtml(recipe.title)}</div>
-        <div class="recipe-card-meta">${ingCount} ingredient${ingCount !== 1 ? 's' : ''}</div>
-      </div>
-      <div class="recipe-card-arrow">&#8250;</div>`;
-    card.addEventListener('click', () => navigateTo('detail', recipe.id));
-    grid.appendChild(card);
+
+  const sorted = [...state.recipes].sort((a, b) => a.title.localeCompare(b.title));
+
+  if (state.recipeSort === 'alpha') {
+    container.appendChild(makeRecipeGrid(sorted));
+    return;
   }
-  container.appendChild(grid);
+
+  // Key ingredient grouping
+  const groups = new Map(); // ingredient name (lowercase) -> { display, recipes[] }
+  const noKeyRecipes = [];
+
+  for (const recipe of sorted) {
+    const keyIngs = (recipe.ingredients || []).filter(i => i.keyIngredient);
+    if (!keyIngs.length) { noKeyRecipes.push(recipe); continue; }
+    const ingsToUse = state.recipeSort === 'key-top' ? [keyIngs[0]] : keyIngs;
+    for (const ing of ingsToUse) {
+      const key = ing.name.toLowerCase();
+      if (!groups.has(key)) groups.set(key, { display: ing.name, recipes: [] });
+      groups.get(key).recipes.push(recipe);
+    }
+  }
+
+  const sortedGroups = [...groups.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+
+  for (const [, { display, recipes }] of sortedGroups) {
+    const section = document.createElement('div');
+    section.className = 'recipe-group';
+    section.innerHTML = `<div class="recipe-group-header">${escHtml(display)}</div>`;
+    section.appendChild(makeRecipeGrid(recipes));
+    container.appendChild(section);
+  }
+
+  if (noKeyRecipes.length) {
+    const section = document.createElement('div');
+    section.className = 'recipe-group';
+    section.innerHTML = `<div class="recipe-group-header recipe-group-other">Other</div>`;
+    section.appendChild(makeRecipeGrid(noKeyRecipes));
+    container.appendChild(section);
+  }
 }
 
 // ============================================================

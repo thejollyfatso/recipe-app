@@ -345,6 +345,12 @@ body {
   border-radius: var(--radius-md);
 }
 
+.ing-key-star {
+  color: var(--color-primary);
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
 .ing-chevron {
   margin-left: auto;
   flex-shrink: 0;

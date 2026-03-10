@@ -631,12 +631,17 @@ function renderRecipeDetail(id) {
     </div>`;
 
   const ingList = $('detail-ingredient-list');
-  for (const ing of (recipe.ingredients || [])) {
+  const allIngs = recipe.ingredients || [];
+  const keyIngs = allIngs.filter(i => i.keyIngredient);
+  const otherIngs = allIngs.filter(i => !i.keyIngredient);
+  const sortedIngs = [...keyIngs, ...otherIngs];
+  for (const ing of sortedIngs) {
     const { qty, name } = formatIngredientDisplay(ing.qty, ing.unit, ing.name);
     const hasSubs = (ing.substitutions || []).length > 0;
     const el = document.createElement('div');
-    el.className = 'ingredient-item';
+    el.className = 'ingredient-item' + (ing.keyIngredient ? ' key-ingredient' : '');
     el.innerHTML = `
+      ${ing.keyIngredient ? `<span class="ing-key-star" aria-label="Key ingredient">&#9733;</span>` : ''}
       <span class="ingredient-qty">${escHtml(qty)}</span>
       <span class="ingredient-name">${escHtml(name)}</span>
       ${ing.optional ? `<span class="ing-optional">optional</span>` : ''}

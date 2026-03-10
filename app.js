@@ -64,6 +64,8 @@ function singularize(word) {
 
 function normalizeIngredientName(name) {
   let n = name.toLowerCase().trim();
+  n = n.replace(/[^\w\s]/g, '');  // strip punctuation
+  n = n.replace(/\s+/g, ' ').trim();  // collapse whitespace
   n = n.replace(/^(a |an |the )/, '');
   n = singularize(n);
   return n;
@@ -572,16 +574,11 @@ function makeRecipeCard(recipe) {
   const card = document.createElement('div');
   card.className = 'recipe-card';
   const ingCount = recipe.ingredients?.length || 0;
-  const keyIngs = (recipe.ingredients || []).filter(i => i.keyIngredient);
-  const keyStars = keyIngs.length
-    ? `<div class="recipe-card-key-ings">${keyIngs.map(i => `<span class="recipe-card-key-tag">${escHtml(i.name)}</span>`).join('')}</div>`
-    : '';
   card.innerHTML = `
     <div class="recipe-card-body">
       <div class="recipe-card-title">${escHtml(recipe.title)}</div>
       <div class="recipe-card-meta">${ingCount} ingredient${ingCount !== 1 ? 's' : ''}</div>
     </div>
-    ${keyStars}
     <div class="recipe-card-arrow">&#8250;</div>`;
   card.addEventListener('click', () => navigateTo('detail', recipe.id));
   return card;
@@ -641,7 +638,7 @@ function renderRecipesList() {
     if (!keyIngs.length) { noKeyRecipes.push(recipe); continue; }
     const ingsToUse = state.recipeSort === 'key-top' ? [keyIngs[0]] : keyIngs;
     for (const ing of ingsToUse) {
-      const key = ing.name.toLowerCase();
+      const key = normalizeIngredientName(ing.name);
       if (!groups.has(key)) groups.set(key, { display: ing.name, recipes: [] });
       groups.get(key).recipes.push(recipe);
     }
@@ -710,11 +707,11 @@ function renderRecipeDetail(id) {
     const el = document.createElement('div');
     el.className = 'ingredient-item' + (ing.keyIngredient ? ' key-ingredient' : '');
     el.innerHTML = `
-      ${ing.keyIngredient ? `<span class="ing-key-star" aria-label="Key ingredient">&#9733;</span>` : ''}
       <span class="ingredient-qty">${escHtml(qty)}</span>
       <span class="ingredient-name">${escHtml(name)}</span>
       ${ing.optional ? `<span class="ing-optional">optional</span>` : ''}
-      ${hasSubs ? `<button class="ing-chevron" aria-label="Show substitutions">&#8250;</button>` : ''}`;
+      ${hasSubs ? `<button class="ing-chevron" aria-label="Show substitutions">&#8250;</button>` : ''}
+      ${ing.keyIngredient ? `<span class="ing-key-star" aria-label="Key ingredient">&#9733;</span>` : ''}`;
     if (hasSubs) {
       el.querySelector('.ing-chevron').addEventListener('click', e => {
         e.stopPropagation();

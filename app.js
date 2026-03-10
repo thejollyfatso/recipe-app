@@ -166,6 +166,7 @@ function mergeIngredients(existingItems, newIngredients, recipeId) {
     const qty = parseQtyUpper(ing.qty);  // always use upper bound for ranges
     const unit = (ing.unit || '').toLowerCase().trim();
     const subs = ing.substitutions || [];
+    const ingOptional = !!ing.optional;
 
     const matchIdx = result.findIndex(item =>
       ingredientsMatch(item.normalizedName, normalized)
@@ -180,6 +181,7 @@ function mergeIngredients(existingItems, newIngredients, recipeId) {
         sourceRecipes: [recipeId],
         substitutions: subs,
         substitutedWith: null,
+        optional: ingOptional,
       });
     } else {
       const item = result[matchIdx];
@@ -193,6 +195,8 @@ function mergeIngredients(existingItems, newIngredients, recipeId) {
       for (const sub of subs) {
         if (!item.substitutions.includes(sub)) item.substitutions.push(sub);
       }
+      // Only stays optional if every contributing ingredient is optional
+      if (!ingOptional) item.optional = false;
     }
   }
 
@@ -289,6 +293,13 @@ function parseIngredientLine(rawLine) {
     return '';
   }).trim();
 
+  // Detect optional markers
+  let optional = false;
+  s = s.replace(/,?\s*\(optional\)/gi, () => { optional = true; return ''; }).trim();
+  s = s.replace(/,?\s*\bif\s+(?:desired|using|you\s+like)\b/gi, () => { optional = true; return ''; }).trim();
+  s = s.replace(/^optional[:\s]+/i, () => { optional = true; return ''; }).trim();
+  s = s.replace(/,?\s*\boptional\b$/i, () => { optional = true; return ''; }).trim();
+
   // Remove remaining parenthetical notes
   s = s.replace(/\s*\([^)]*\)/g, '').trim();
 
@@ -349,7 +360,7 @@ function parseIngredientLine(rawLine) {
   const name = rest.trim();
   if (!name) return null;
 
-  return { qty, unit, name, ...(substitutions.length ? { substitutions } : {}) };
+  return { qty, unit, name, ...(substitutions.length ? { substitutions } : {}), ...(optional ? { optional: true } : {}) };
 }
 
 // Split a string on commas that are not inside parentheses and not between digits.
@@ -608,6 +619,7 @@ function renderRecipeDetail(id) {
     el.innerHTML = `
       <span class="ingredient-qty">${escHtml(qty)}</span>
       <span class="ingredient-name">${escHtml(name)}</span>
+      ${ing.optional ? `<span class="ing-optional">optional</span>` : ''}
       ${hasSubs ? `<button class="ing-chevron" aria-label="Show substitutions">&#8250;</button>` : ''}`;
     if (hasSubs) {
       el.querySelector('.ing-chevron').addEventListener('click', e => {
@@ -671,24 +683,40 @@ function renderRecipeEdit(id) {
 
   const editor = $('ingredients-editor');
 
-  function addIngredientRow(qty = '', unit = '', name = '', substitutions = []) {
+  function addIngredientRow(qty = '', unit = '', name = '', substitutions = [], optional = false) {
     const row = document.createElement('div');
     row.className = 'ingredient-row';
-    row.dataset.substitutions = JSON.stringify(substitutions);
+    const detailsOpen = optional || substitutions.length > 0;
     row.innerHTML = `
-      <input class="ing-qty" type="text" inputmode="decimal" placeholder="qty" value="${escHtml(qty)}" />
-      <span class="ing-sep">&middot;</span>
-      <input class="ing-unit" type="text" placeholder="unit" value="${escHtml(unit)}" />
-      <span class="ing-sep">&middot;</span>
-      <input class="ing-name" type="text" placeholder="ingredient name" value="${escHtml(name)}" />
-      <button type="button" class="ing-remove-btn" aria-label="Remove">&#215;</button>`;
+      <div class="ing-main">
+        <input class="ing-qty" type="text" inputmode="decimal" placeholder="qty" value="${escHtml(qty)}" />
+        <span class="ing-sep">&middot;</span>
+        <input class="ing-unit" type="text" placeholder="unit" value="${escHtml(unit)}" />
+        <span class="ing-sep">&middot;</span>
+        <input class="ing-name" type="text" placeholder="ingredient name" value="${escHtml(name)}" />
+        <button type="button" class="ing-expand-btn${detailsOpen ? ' active' : ''}" aria-label="More options">&#8943;</button>
+        <button type="button" class="ing-remove-btn" aria-label="Remove">&#215;</button>
+      </div>
+      <div class="ing-details${detailsOpen ? '' : ' hidden'}">
+        <button type="button" class="ing-opt-btn${optional ? ' active' : ''}">optional</button>
+        <input class="ing-subs" type="text" placeholder="substitutions (comma-separated)" value="${escHtml(substitutions.join(', '))}" />
+      </div>`;
     row.querySelector('.ing-remove-btn').addEventListener('click', () => row.remove());
+    row.querySelector('.ing-expand-btn').addEventListener('click', () => {
+      const details = row.querySelector('.ing-details');
+      const btn = row.querySelector('.ing-expand-btn');
+      const open = details.classList.toggle('hidden');
+      btn.classList.toggle('active', !open);
+    });
+    row.querySelector('.ing-opt-btn').addEventListener('click', () => {
+      row.querySelector('.ing-opt-btn').classList.toggle('active');
+    });
     editor.appendChild(row);
   }
 
   const ingredients = recipe?.ingredients || [];
   if (ingredients.length) {
-    ingredients.forEach(ing => addIngredientRow(ing.qty, ing.unit, ing.name, ing.substitutions || []));
+    ingredients.forEach(ing => addIngredientRow(ing.qty, ing.unit, ing.name, ing.substitutions || [], !!ing.optional));
   } else {
     addIngredientRow();
   }
@@ -712,10 +740,12 @@ function renderRecipeEdit(id) {
           const q = row.querySelector('.ing-qty').value.trim();
           const u = row.querySelector('.ing-unit').value.trim();
           const n = row.querySelector('.ing-name').value.trim();
-          const subs = JSON.parse(row.dataset.substitutions || '[]');
+          const subs = row.querySelector('.ing-subs').value.split(',').map(s => s.trim()).filter(Boolean);
+          const opt = row.querySelector('.ing-opt-btn').classList.contains('active');
           if (n) {
             let line = [q, u, n].filter(Boolean).join(' ');
             if (subs.length) line += ` (or ${subs.join(', or ')})`;
+            if (opt) line += ' (optional)';
             lines.push(line);
           }
         }
@@ -727,7 +757,7 @@ function renderRecipeEdit(id) {
         const parsed = parseIngredientBlock($('ing-auto-text').value);
         editor.innerHTML = '';
         if (parsed.length) {
-          parsed.forEach(ing => addIngredientRow(ing.qty, ing.unit, ing.name, ing.substitutions || []));
+          parsed.forEach(ing => addIngredientRow(ing.qty, ing.unit, ing.name, ing.substitutions || [], !!ing.optional));
           showToast(`${parsed.length} ingredient${parsed.length !== 1 ? 's' : ''} parsed`);
         } else {
           addIngredientRow();
@@ -792,6 +822,7 @@ function renderShoppingList() {
       const hasSubs = (item.substitutions || []).length > 0;
       const substitutedWith = item.substitutedWith || null;
       const hasMultipleUnits = item.quantities.length > 1;
+      const isOptional = !!item.optional;
 
       el.innerHTML = `
         <div class="check-zone">
@@ -803,6 +834,7 @@ function renderShoppingList() {
           <div class="shopping-item-qty">${escHtml(qtyDisplay)}</div>
           <div class="shopping-item-name">${escHtml(item.name)}</div>
           ${substitutedWith ? `<div class="shopping-item-note">using: ${escHtml(substitutedWith)}</div>` : ''}
+          ${isOptional && !substitutedWith ? `<div class="shopping-item-note">optional</div>` : ''}
           ${hasMultipleUnits && !substitutedWith ? `<div class="shopping-item-note">combined from multiple recipes</div>` : ''}
         </div>
         ${hasSubs ? `<button class="item-chevron" aria-label="Show substitutions">&#8250;</button>` : ''}`;
@@ -994,7 +1026,8 @@ async function saveRecipe(id) {
         qty: row.querySelector('.ing-qty').value.trim(),
         unit: row.querySelector('.ing-unit').value.trim(),
         name,
-        substitutions: JSON.parse(row.dataset.substitutions || '[]'),
+        substitutions: row.querySelector('.ing-subs').value.split(',').map(s => s.trim()).filter(Boolean),
+        ...(row.querySelector('.ing-opt-btn').classList.contains('active') ? { optional: true } : {}),
       });
     }
   }

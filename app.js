@@ -534,13 +534,15 @@ function showView(viewId) {
 
   document.querySelectorAll('.nav-btn').forEach(btn => {
     btn.classList.toggle('active', btn.dataset.view === (
-      viewId === 'recipes' || viewId === 'detail' || viewId === 'edit' ? 'recipes' : 'shopping'
+      viewId === 'recipes' || viewId === 'detail' || viewId === 'edit' || viewId === 'ingredient-select' ? 'recipes' : 'shopping'
     ));
   });
 }
 
 function goBack() {
-  if (state.currentView === 'detail' || state.currentView === 'edit') {
+  if (state.currentView === 'ingredient-select') {
+    navigateTo('detail', state.viewingRecipeId);
+  } else if (state.currentView === 'detail' || state.currentView === 'edit') {
     navigateTo('recipes');
   }
 }
@@ -564,6 +566,10 @@ function navigateTo(view, id = null) {
   } else if (view === 'shopping') {
     renderShoppingList();
     showView('shopping');
+  } else if (view === 'ingredient-select') {
+    state.viewingRecipeId = id;
+    renderIngredientSelect(id);
+    showView('ingredient-select');
   }
 }
 
@@ -694,6 +700,7 @@ function renderRecipeDetail(id) {
       <button class="btn-primary ${isAdded ? 'added' : ''}" id="add-to-shopping-btn">
         ${isAdded ? '&#10003; In Shopping List' : '&#43; Add to Shopping List'}
       </button>
+      <button class="btn-secondary" id="choose-ingredients-btn">Choose Ingredients</button>
     </div>`;
 
   const ingList = $('detail-ingredient-list');
@@ -722,6 +729,74 @@ function renderRecipeDetail(id) {
   }
 
   $('add-to-shopping-btn').addEventListener('click', () => addRecipeToShoppingList(id));
+  $('choose-ingredients-btn').addEventListener('click', () => navigateTo('ingredient-select', id));
+}
+
+// ============================================================
+// Render: Ingredient Select
+// ============================================================
+function renderIngredientSelect(id) {
+  const recipe = state.recipes.find(r => r.id === id);
+  if (!recipe) { navigateTo('recipes'); return; }
+
+  setHeader({ title: 'Choose Ingredients', showBack: true });
+
+  const allIngs = recipe.ingredients || [];
+  const keyIngs = allIngs.filter(i => i.keyIngredient);
+  const otherIngs = allIngs.filter(i => !i.keyIngredient);
+  const sortedIngs = [...keyIngs, ...otherIngs];
+
+  const view = $('view-ingredient-select');
+  view.innerHTML = `
+    <div class="ing-select-list" id="ing-select-list"></div>
+    <div class="ing-select-actions">
+      <button class="btn-secondary" id="ing-select-cancel">Cancel</button>
+      <button class="btn-primary" id="ing-select-confirm">Add to Shopping List</button>
+    </div>`;
+
+  const list = $('ing-select-list');
+  sortedIngs.forEach((ing, idx) => {
+    const { qty, name } = formatIngredientDisplay(ing.qty, ing.unit, ing.name);
+    const row = document.createElement('label');
+    row.className = 'ing-select-row' + (ing.keyIngredient ? ' key-ingredient' : '');
+    row.innerHTML = `
+      <input type="checkbox" class="ing-select-checkbox" data-idx="${idx}" checked />
+      <span class="ingredient-qty">${escHtml(qty)}</span>
+      <span class="ingredient-name">${escHtml(name)}</span>
+      ${ing.optional ? `<span class="ing-optional">optional</span>` : ''}
+      ${ing.keyIngredient ? `<span class="ing-key-star" aria-label="Key ingredient">&#9733;</span>` : ''}`;
+    list.appendChild(row);
+  });
+
+  $('ing-select-cancel').addEventListener('click', () => navigateTo('detail', id));
+  $('ing-select-confirm').addEventListener('click', async () => {
+    const checked = [...list.querySelectorAll('.ing-select-checkbox:checked')]
+      .map(cb => sortedIngs[parseInt(cb.dataset.idx)]);
+    if (!checked.length) { showToast('No ingredients selected'); return; }
+    await addSelectedIngredientsToShoppingList(id, checked);
+  });
+}
+
+async function addSelectedIngredientsToShoppingList(recipeId, selectedIngredients) {
+  const recipe = state.recipes.find(r => r.id === recipeId);
+  const confirmBtn = $('ing-select-confirm');
+  if (confirmBtn) { confirmBtn.disabled = true; confirmBtn.textContent = 'Adding...'; }
+
+  try {
+    const newManualItems = [...state.manualItems, ...selectedIngredients];
+    let merged = buildShoppingListFromSources(newManualItems, [...state.addedRecipeIds]);
+    merged = merged.map(item => {
+      const existing = state.shoppingList.find(e => e.normalizedName === item.normalizedName);
+      return { ...item, checked: existing?.checked || false };
+    });
+    await writeShoppingList(merged, [...state.addedRecipeIds], newManualItems);
+    showToast(`${selectedIngredients.length} ingredient${selectedIngredients.length !== 1 ? 's' : ''} added`);
+    navigateTo('detail', recipeId);
+  } catch (err) {
+    console.error(err);
+    showToast('Error updating shopping list');
+    if (confirmBtn) { confirmBtn.disabled = false; confirmBtn.textContent = 'Add to Shopping List'; }
+  }
 }
 
 // ============================================================

@@ -998,6 +998,9 @@ function renderShoppingList() {
       const substitutedWith = item.substitutedWith || null;
       const hasMultipleUnits = item.quantities.length > 1;
       const isOptional = !!item.optional;
+      const sourceRecipeTitles = (item.sourceRecipes || [])
+        .map(id => state.recipes.find(r => r.id === id)?.title)
+        .filter(Boolean);
 
       el.innerHTML = `
         <div class="check-zone">
@@ -1011,6 +1014,7 @@ function renderShoppingList() {
           ${substitutedWith ? `<div class="shopping-item-note">using: ${escHtml(substitutedWith)}</div>` : ''}
           ${isOptional && !substitutedWith ? `<div class="shopping-item-note">optional</div>` : ''}
           ${hasMultipleUnits && !substitutedWith ? `<div class="shopping-item-note">combined from multiple recipes</div>` : ''}
+          ${sourceRecipeTitles.length > 0 ? `<div class="recipe-source-tags">${sourceRecipeTitles.map(t => `<span class="recipe-source-tag">${escHtml(t)}</span>`).join('')}</div>` : ''}
         </div>
         ${hasSubs ? `<button class="item-chevron" aria-label="Show substitutions">&#8250;</button>` : ''}`;
 

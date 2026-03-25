@@ -954,6 +954,22 @@ textarea.form-input {
   margin-top: 2px;
 }
 
+.recipe-source-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.recipe-source-tag {
+  font-size: 11px;
+  color: var(--color-primary);
+  background: var(--color-primary-light);
+  padding: 1px 6px;
+  border-radius: 10px;
+  white-space: nowrap;
+}
+
 /* ============================================================
    Toast notification
    ============================================================ */

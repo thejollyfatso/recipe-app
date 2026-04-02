@@ -133,6 +133,31 @@ body {
 
 .header-btn.danger:active { background: #FEF2F2; }
 
+.clear-group {
+  display: flex;
+  align-items: center;
+  gap: 0;
+}
+
+.clear-label {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-danger);
+  padding: 6px 4px 6px 10px;
+}
+
+.clear-sep {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-danger);
+  opacity: 0.4;
+  padding: 6px 0;
+}
+
+.clear-group .header-btn {
+  padding: 6px 6px;
+}
+
 /* ============================================================
    Main content area
    ============================================================ */

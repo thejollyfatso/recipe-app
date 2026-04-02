@@ -890,9 +890,33 @@ function renderShoppingList() {
     title: 'Shopping List',
     actions: [
       { label: '+ Add', handler: showAddItemModal },
-      ...(state.shoppingList.length > 0 ? [{ label: 'Clear', handler: clearShoppingList, cls: 'danger' }] : []),
     ],
   });
+
+  if (state.shoppingList.length > 0) {
+    const actionsEl = $('header-actions');
+    const group = document.createElement('span');
+    group.className = 'clear-group';
+    const label = document.createElement('span');
+    label.className = 'clear-label';
+    label.textContent = 'Clear:';
+    const allBtn = document.createElement('button');
+    allBtn.className = 'header-btn danger';
+    allBtn.textContent = 'All';
+    allBtn.addEventListener('click', clearShoppingList);
+    const sep = document.createElement('span');
+    sep.className = 'clear-sep';
+    sep.textContent = '|';
+    const doneBtn = document.createElement('button');
+    doneBtn.className = 'header-btn danger';
+    doneBtn.textContent = 'Done';
+    doneBtn.addEventListener('click', clearCheckedItems);
+    group.appendChild(label);
+    group.appendChild(allBtn);
+    group.appendChild(sep);
+    group.appendChild(doneBtn);
+    actionsEl.appendChild(group);
+  }
 
   const view = $('view-shopping');
 
@@ -1283,6 +1307,21 @@ async function clearShoppingList() {
   } catch (err) {
     console.error(err);
     showToast('Error clearing list');
+  }
+}
+
+async function clearCheckedItems() {
+  const checked = state.shoppingList.filter(i => i.checked);
+  if (!checked.length) { showToast('No checked items to clear'); return; }
+  try {
+    const batch = writeBatch(db);
+    for (const item of checked) {
+      batch.delete(doc(db, 'shoppingList', item.id));
+    }
+    await batch.commit();
+  } catch (err) {
+    console.error(err);
+    showToast('Error clearing checked items');
   }
 }
 

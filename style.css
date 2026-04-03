@@ -314,12 +314,13 @@ body {
 .search-bar-wrap {
   padding: 8px 16px 4px;
   display: flex;
-  flex-direction: column;
-  gap: 6px;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
 }
 
 .search-input {
-  width: 100%;
+  flex: 1;
   box-sizing: border-box;
   padding: 8px 12px;
   border-radius: 10px;
@@ -329,14 +330,11 @@ body {
   font-size: 15px;
   outline: none;
   font-family: inherit;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.1);
 }
 
 .search-input:focus {
   border-color: var(--primary);
-}
-
-.search-mode-toggle {
-  align-self: center;
 }
 
 .sort-toggle-bar {

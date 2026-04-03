@@ -618,7 +618,7 @@ function renderRecipesList() {
       placeholder="Search…" value="${escHtml(state.searchQuery)}">
     <div class="ing-mode-toggle search-mode-toggle">
       <button class="ing-mode-btn${state.searchMode === 'recipe' ? ' active' : ''}" data-mode="recipe">Recipe</button>
-      <button class="ing-mode-btn${state.searchMode === 'ingredient' ? ' active' : ''}" data-mode="ingredient">Ingredient</button>
+      <button class="ing-mode-btn${state.searchMode === 'ingredient' ? ' active' : ''}" data-mode="ingredient">Ing.</button>
     </div>`;
   searchWrap.querySelector('#recipe-search-input').addEventListener('input', e => {
     state.searchQuery = e.target.value;

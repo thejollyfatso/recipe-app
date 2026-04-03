@@ -311,6 +311,34 @@ body {
   flex-shrink: 0;
 }
 
+.search-bar-wrap {
+  padding: 8px 16px 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.search-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 12px;
+  border-radius: 10px;
+  border: 1.5px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 15px;
+  outline: none;
+  font-family: inherit;
+}
+
+.search-input:focus {
+  border-color: var(--primary);
+}
+
+.search-mode-toggle {
+  align-self: center;
+}
+
 .sort-toggle-bar {
   display: flex;
   justify-content: center;

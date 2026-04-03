@@ -34,6 +34,8 @@ const state = {
   viewingRecipeId: null,
   editingRecipeId: null,
   recipeSort: 'alpha',
+  searchQuery: '',
+  searchMode: 'recipe',
 };
 
 let unsubRecipes = null;
@@ -94,6 +96,12 @@ function ingredientsMatch(a, b) {
   const maxLen = Math.max(a.length, b.length);
   if (maxLen < 4) return false;
   return levenshtein(a, b) === 1;
+}
+
+function recipeMatchesTerm(recipe, normalizedTerm) {
+  return (recipe.ingredients || []).some(ing =>
+    ingredientsMatch(normalizeIngredientName(ing.name), normalizedTerm)
+  );
 }
 
 function parseQty(qtyStr) {
@@ -602,6 +610,34 @@ function renderRecipesList() {
   const container = $('recipes-list');
   container.innerHTML = '';
 
+  // Search bar
+  const searchWrap = document.createElement('div');
+  searchWrap.className = 'search-bar-wrap';
+  searchWrap.innerHTML = `
+    <input id="recipe-search-input" class="search-input" type="search"
+      placeholder="Search…" value="${escHtml(state.searchQuery)}">
+    <div class="ing-mode-toggle search-mode-toggle">
+      <button class="ing-mode-btn${state.searchMode === 'recipe' ? ' active' : ''}" data-mode="recipe">Recipe</button>
+      <button class="ing-mode-btn${state.searchMode === 'ingredient' ? ' active' : ''}" data-mode="ingredient">Ingredient</button>
+    </div>`;
+  searchWrap.querySelector('#recipe-search-input').addEventListener('input', e => {
+    state.searchQuery = e.target.value;
+    renderRecipesList();
+  });
+  searchWrap.querySelector('.search-mode-toggle').addEventListener('click', e => {
+    const btn = e.target.closest('[data-mode]');
+    if (!btn) return;
+    state.searchMode = btn.dataset.mode;
+    renderRecipesList();
+  });
+  container.appendChild(searchWrap);
+  // Restore focus/cursor position after re-render
+  const searchInput = searchWrap.querySelector('#recipe-search-input');
+  if (state.searchQuery) {
+    searchInput.focus();
+    searchInput.setSelectionRange(state.searchQuery.length, state.searchQuery.length);
+  }
+
   // Sort toggle
   const toggleBar = document.createElement('div');
   toggleBar.className = 'sort-toggle-bar';
@@ -625,6 +661,51 @@ function renderRecipesList() {
         <div class="empty-icon">&#127859;</div>
         <p>No recipes yet.<br>Tap <strong>+</strong> to add your first one.</p>
       </div>`);
+    return;
+  }
+
+  // Active search — bypass normal sort/group rendering
+  if (state.searchQuery.trim()) {
+    if (state.searchMode === 'recipe') {
+      const q = state.searchQuery.toLowerCase();
+      const results = state.recipes.filter(r => r.title.toLowerCase().includes(q));
+      if (results.length) {
+        container.appendChild(makeRecipeGrid(results));
+      } else {
+        container.insertAdjacentHTML('beforeend', `<div class="empty-state"><p>No recipes match.</p></div>`);
+      }
+    } else {
+      // Ingredient mode
+      const terms = state.searchQuery
+        .split(/[,\n]+/)
+        .map(t => normalizeIngredientName(t.trim()))
+        .filter(Boolean);
+      if (terms.length) {
+        const allMatches = state.recipes.filter(r => terms.every(t => recipeMatchesTerm(r, t)));
+        const anyMatches = state.recipes.filter(r =>
+          !terms.every(t => recipeMatchesTerm(r, t)) &&
+          terms.some(t => recipeMatchesTerm(r, t))
+        );
+        if (!allMatches.length && !anyMatches.length) {
+          container.insertAdjacentHTML('beforeend', `<div class="empty-state"><p>No recipes match.</p></div>`);
+        } else {
+          if (allMatches.length) {
+            const section = document.createElement('div');
+            section.className = 'recipe-group';
+            section.innerHTML = `<div class="recipe-group-header">All</div>`;
+            section.appendChild(makeRecipeGrid(allMatches));
+            container.appendChild(section);
+          }
+          if (anyMatches.length) {
+            const section = document.createElement('div');
+            section.className = 'recipe-group';
+            section.innerHTML = `<div class="recipe-group-header">Any</div>`;
+            section.appendChild(makeRecipeGrid(anyMatches));
+            container.appendChild(section);
+          }
+        }
+      }
+    }
     return;
   }
 

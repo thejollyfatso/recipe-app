@@ -6,7 +6,7 @@ import {
   addDoc, setDoc, updateDoc, deleteDoc,
   onSnapshot, query, orderBy,
   writeBatch,
-  serverTimestamp,
+  serverTimestamp, Timestamp,
 } from 'https://www.gstatic.com/firebasejs/11.3.0/firebase-firestore.js';
 import { firebaseConfig } from './firebase-config.js';
 
@@ -675,6 +675,7 @@ function renderRecipesList() {
         <div class="empty-icon">&#127859;</div>
         <p>No recipes yet.<br>Tap <strong>+</strong> to add your first one.</p>
       </div>`);
+    appendDataFooter(container);
     return;
   }
 
@@ -720,6 +721,7 @@ function renderRecipesList() {
         }
       }
     }
+    appendDataFooter(container);
     return;
   }
 
@@ -727,6 +729,7 @@ function renderRecipesList() {
 
   if (state.recipeSort === 'alpha') {
     container.appendChild(makeRecipeGrid(sorted));
+    appendDataFooter(container);
     return;
   }
 
@@ -762,6 +765,7 @@ function renderRecipesList() {
     section.appendChild(makeRecipeGrid(noKeyRecipes));
     container.appendChild(section);
   }
+  appendDataFooter(container);
 }
 
 // ============================================================
@@ -1590,6 +1594,135 @@ function escHtml(str) {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
+}
+
+// ============================================================
+// Import / Export
+// ============================================================
+function exportRecipes() {
+  if (!state.recipes.length) { showToast('No recipes to export'); return; }
+  const recipes = state.recipes.map(({ id, title, notes, ingredients, createdAt, updatedAt }) => ({
+    id,
+    title,
+    notes: notes || '',
+    ingredients: ingredients || [],
+    createdAt: createdAt?.toDate?.()?.toISOString() ?? new Date().toISOString(),
+    updatedAt: updatedAt?.toDate?.()?.toISOString() ?? new Date().toISOString(),
+  }));
+  const payload = { version: 1, exportedAt: new Date().toISOString(), app: 'mamas-kitchen', recipes };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `mamas-kitchen-v1-${new Date().toISOString().slice(0, 10)}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+async function importRecipes(file) {
+  let data;
+  try {
+    data = JSON.parse(await file.text());
+  } catch {
+    showToast('Invalid file — could not parse JSON');
+    return;
+  }
+
+  if (!Array.isArray(data.recipes)) {
+    showToast('Invalid file — missing recipes array');
+    return;
+  }
+
+  const issues = [];
+  if (data.version === undefined) {
+    issues.push('Missing version field — format may be incorrect.');
+  } else if (data.version !== 1) {
+    issues.push(`Unknown format version (${data.version}) — this backup may have been made with a newer version of the app.`);
+  }
+
+  const validRecipes = data.recipes.filter(r => r && typeof r.title === 'string' && r.title.trim());
+  const invalidCount = data.recipes.length - validRecipes.length;
+  if (invalidCount > 0) {
+    issues.push(`${invalidCount} recipe${invalidCount !== 1 ? 's' : ''} with no title will be skipped.`);
+  }
+
+  if (issues.length) {
+    const proceed = await showImportDialog(issues, validRecipes.length);
+    if (!proceed) return;
+  }
+
+  if (!validRecipes.length) { showToast('Nothing to import'); return; }
+
+  const existingTitles = new Set(state.recipes.map(r => r.title));
+  const toImport = validRecipes.filter(r => !existingTitles.has(r.title.trim()));
+  const skipped = validRecipes.length - toImport.length;
+
+  if (!toImport.length) {
+    showToast('All recipes already exist — nothing imported');
+    return;
+  }
+
+  try {
+    for (const r of toImport) {
+      const createdAt = r.createdAt ? Timestamp.fromDate(new Date(r.createdAt)) : serverTimestamp();
+      await addDoc(collection(db, 'recipes'), {
+        title: r.title.trim(),
+        notes: r.notes || '',
+        ingredients: r.ingredients || [],
+        createdAt,
+        updatedAt: serverTimestamp(),
+      });
+    }
+    const added = toImport.length;
+    showToast(`Imported ${added} recipe${added !== 1 ? 's' : ''}${skipped ? ` (${skipped} skipped — already exist)` : ''}`);
+  } catch (err) {
+    console.error(err);
+    showToast('Error importing recipes');
+  }
+}
+
+function showImportDialog(issues, count) {
+  return new Promise(resolve => {
+    const overlay = document.createElement('div');
+    overlay.className = 'subs-modal-overlay';
+    const modal = document.createElement('div');
+    modal.className = 'subs-modal';
+    modal.innerHTML = `
+      <div class="subs-modal-header">
+        <div class="subs-modal-title">Import issues</div>
+      </div>
+      <div class="subs-modal-body" style="padding: 16px 20px;">
+        <ul class="import-issues">${issues.map(i => `<li>${escHtml(i)}</li>`).join('')}</ul>
+        ${count ? `<p class="import-count-note">${count} recipe${count !== 1 ? 's' : ''} can be imported.</p>` : ''}
+      </div>
+      <div class="subs-modal-footer" style="display:flex; gap: 10px;">
+        <button class="btn-secondary" style="flex:1">Cancel</button>
+        <button class="btn-primary" style="flex:2">Import anyway</button>
+      </div>`;
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+    const close = result => { overlay.remove(); resolve(result); };
+    modal.querySelector('.btn-secondary').addEventListener('click', () => close(false));
+    modal.querySelector('.btn-primary').addEventListener('click', () => close(true));
+    overlay.addEventListener('click', e => { if (e.target === overlay) close(false); });
+  });
+}
+
+function appendDataFooter(container) {
+  const footer = document.createElement('div');
+  footer.className = 'data-actions';
+  footer.innerHTML = `
+    <button class="data-btn" id="btn-export">Export</button>
+    <label class="data-btn" for="import-file-input">Import
+      <input type="file" id="import-file-input" accept=".json" style="display:none">
+    </label>`;
+  footer.querySelector('#btn-export').addEventListener('click', exportRecipes);
+  footer.querySelector('#import-file-input').addEventListener('change', e => {
+    const file = e.target.files[0];
+    if (file) importRecipes(file);
+    e.target.value = '';
+  });
+  container.appendChild(footer);
 }
 
 // ============================================================

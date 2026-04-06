@@ -1267,3 +1267,39 @@ textarea.form-input {
   padding: 0 4px;
   width: 80px;
 }
+
+/* ============================================================
+   Data Actions (Import / Export)
+   ============================================================ */
+.data-actions {
+  display: flex;
+  gap: 1.5rem;
+  justify-content: center;
+  padding: 1.5rem 0 2rem;
+  border-top: 1px solid var(--color-border);
+  margin-top: 8px;
+}
+
+.data-btn {
+  background: none;
+  border: none;
+  color: var(--color-text-secondary);
+  font-size: 0.8rem;
+  font-family: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  padding: 0;
+}
+
+.import-issues {
+  margin: 0 0 12px 16px;
+  color: var(--color-text);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.import-count-note {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+}

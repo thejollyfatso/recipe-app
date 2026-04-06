@@ -30,6 +30,8 @@ const state = {
   shoppingList: [],
   addedRecipeIds: new Set(),
   manualItems: [],
+  suppressedItems: [],  // normalizedNames cleared via "Clear Done" — suppressed through rebuilds
+  qtyOverrides: {},     // { [normalizedName]: [{qty, unit}] } — user-edited quantities
   currentView: 'recipes',
   viewingRecipeId: null,
   editingRecipeId: null,
@@ -234,13 +236,25 @@ function mergeIngredients(existingItems, newIngredients, recipeId) {
   return result;
 }
 
-function buildShoppingListFromSources(manualItems, addedIds) {
+// ingredientOverrides: { [recipeId]: ingredients[] } — used when rebuilding after a recipe edit
+function buildShoppingListFromSources(manualItems, addedIds, suppressedItems = state.suppressedItems, qtyOverrides = state.qtyOverrides, ingredientOverrides = {}) {
   let items = mergeIngredients([], manualItems, '__manual__');
   for (const rId of addedIds) {
-    const recipe = state.recipes.find(r => r.id === rId);
-    if (recipe) items = mergeIngredients(items, recipe.ingredients || [], rId);
+    const ings = ingredientOverrides[rId] ?? state.recipes.find(r => r.id === rId)?.ingredients ?? [];
+    items = mergeIngredients(items, ings, rId);
   }
+  items = items.filter(item => !suppressedItems.includes(item.normalizedName));
+  items = items.map(item =>
+    qtyOverrides[item.normalizedName]
+      ? { ...item, quantities: qtyOverrides[item.normalizedName] }
+      : item
+  );
   return items;
+}
+
+// Returns true if a recipe has any presence in the shopping list (full add or partial selection)
+function isRecipeInList(recipeId) {
+  return state.addedRecipeIds.has(recipeId) || state.manualItems.some(mi => mi.recipeId === recipeId);
 }
 
 function formatShoppingItem(item) {
@@ -757,7 +771,7 @@ function renderRecipeDetail(id) {
   const recipe = state.recipes.find(r => r.id === id);
   if (!recipe) { navigateTo('recipes'); return; }
 
-  const isAdded = state.addedRecipeIds.has(id);
+  const isAdded = isRecipeInList(id);
 
   setHeader({
     title: recipe.title,
@@ -859,18 +873,23 @@ function renderIngredientSelect(id) {
 }
 
 async function addSelectedIngredientsToShoppingList(recipeId, selectedIngredients) {
-  const recipe = state.recipes.find(r => r.id === recipeId);
   const confirmBtn = $('ing-select-confirm');
   if (confirmBtn) { confirmBtn.disabled = true; confirmBtn.textContent = 'Adding...'; }
 
   try {
-    const newManualItems = [...state.manualItems, ...selectedIngredients];
-    let merged = buildShoppingListFromSources(newManualItems, [...state.addedRecipeIds]);
+    // Tag each ingredient with its source recipe so we can avoid double-counting
+    // if the full recipe is later added, and so removal is clean
+    const taggedIngredients = selectedIngredients.map(ing => ({ ...ing, recipeId }));
+    const newManualItems = [...state.manualItems, ...taggedIngredients];
+    // Un-suppress any of these items that were previously cleared
+    const addedNames = taggedIngredients.map(ing => normalizeIngredientName(ing.name));
+    const newSuppressedItems = state.suppressedItems.filter(n => !addedNames.includes(n));
+    let merged = buildShoppingListFromSources(newManualItems, [...state.addedRecipeIds], newSuppressedItems, state.qtyOverrides);
     merged = merged.map(item => {
       const existing = state.shoppingList.find(e => e.normalizedName === item.normalizedName);
       return { ...item, checked: existing?.checked || false };
     });
-    await writeShoppingList(merged, [...state.addedRecipeIds], newManualItems);
+    await writeShoppingList(merged, [...state.addedRecipeIds], newManualItems, newSuppressedItems, state.qtyOverrides);
     showToast(`${selectedIngredients.length} ingredient${selectedIngredients.length !== 1 ? 's' : ''} added`);
     navigateTo('detail', recipeId);
   } catch (err) {
@@ -1146,7 +1165,7 @@ function renderShoppingList() {
           const input = document.createElement('input');
           input.className = 'qty-edit-input';
           input.value = currentText;
-          input.setAttribute('inputmode', 'decimal');
+          input.setAttribute('inputmode', 'text');
           qtyEl.textContent = '';
           qtyEl.appendChild(input);
           input.focus();
@@ -1172,7 +1191,14 @@ function renderShoppingList() {
               newUnit = '';
             }
             try {
-              await updateDoc(doc(db, 'shoppingList', item.id), { quantities: [{ qty: newQty, unit: newUnit }] });
+              // Store as a qty override so the edit survives future list rebuilds
+              const newQtyOverrides = { ...state.qtyOverrides, [item.normalizedName]: [{ qty: newQty, unit: newUnit }] };
+              let newItems = buildShoppingListFromSources(state.manualItems, [...state.addedRecipeIds], state.suppressedItems, newQtyOverrides);
+              newItems = newItems.map(i => {
+                const existing = state.shoppingList.find(e => e.normalizedName === i.normalizedName);
+                return { ...i, checked: existing?.checked || false };
+              });
+              await writeShoppingList(newItems, [...state.addedRecipeIds], state.manualItems, state.suppressedItems, newQtyOverrides);
             } catch (err) {
               console.error(err);
               showToast('Error updating quantity');
@@ -1283,11 +1309,16 @@ function startListeners() {
 
   unsubMeta = onSnapshot(doc(db, 'meta', 'shoppingMeta'), (snap) => {
     if (snap.exists()) {
-      state.addedRecipeIds = new Set(snap.data().addedRecipeIds || []);
-      state.manualItems = snap.data().manualItems || [];
+      const d = snap.data();
+      state.addedRecipeIds = new Set(d.addedRecipeIds || []);
+      state.manualItems = d.manualItems || [];
+      state.suppressedItems = d.suppressedItems || [];
+      state.qtyOverrides = d.qtyOverrides || {};
     } else {
       state.addedRecipeIds = new Set();
       state.manualItems = [];
+      state.suppressedItems = [];
+      state.qtyOverrides = {};
     }
     if (state.currentView === 'detail') renderRecipeDetail(state.viewingRecipeId);
   });
@@ -1333,7 +1364,7 @@ async function saveRecipe(id) {
 
     if (id) {
       await updateDoc(doc(db, 'recipes', id), data);
-      if (state.addedRecipeIds.has(id)) {
+      if (isRecipeInList(id)) {
         await rebuildShoppingListContribution(id, ingredients);
       }
     } else {
@@ -1354,7 +1385,7 @@ async function deleteRecipe(id) {
   if (!confirm('Delete this recipe?')) return;
   try {
     await deleteDoc(doc(db, 'recipes', id));
-    if (state.addedRecipeIds.has(id)) {
+    if (isRecipeInList(id)) {
       await removeRecipeFromShoppingList(id);
     }
     navigateTo('recipes');
@@ -1373,7 +1404,7 @@ async function addRecipeToShoppingList(recipeId) {
 
   const btn = $('add-to-shopping-btn');
 
-  if (state.addedRecipeIds.has(recipeId)) {
+  if (isRecipeInList(recipeId)) {
     if (btn) { btn.disabled = true; btn.textContent = 'Removing...'; }
     try {
       await removeRecipeFromShoppingList(recipeId);
@@ -1390,13 +1421,18 @@ async function addRecipeToShoppingList(recipeId) {
   if (btn) { btn.disabled = true; btn.textContent = 'Adding...'; }
 
   try {
+    // Strip any partial (selected-ingredient) entries for this recipe from manualItems
+    const cleanedManualItems = state.manualItems.filter(mi => mi.recipeId !== recipeId);
     const newAddedIds = [...state.addedRecipeIds, recipeId];
-    let merged = buildShoppingListFromSources(state.manualItems, newAddedIds);
+    // Un-suppress any ingredients from this recipe so they reappear
+    const recipeIngNames = new Set((recipe.ingredients || []).map(ing => normalizeIngredientName(ing.name)));
+    const newSuppressedItems = state.suppressedItems.filter(n => !recipeIngNames.has(n));
+    let merged = buildShoppingListFromSources(cleanedManualItems, newAddedIds, newSuppressedItems, state.qtyOverrides);
     merged = merged.map(item => {
       const existing = state.shoppingList.find(e => e.normalizedName === item.normalizedName);
       return { ...item, checked: existing?.checked || false };
     });
-    await writeShoppingList(merged, newAddedIds);
+    await writeShoppingList(merged, newAddedIds, cleanedManualItems, newSuppressedItems, state.qtyOverrides);
     showToast(`"${recipe.title}" added to list`);
     renderRecipeDetail(recipeId);
   } catch (err) {
@@ -1408,21 +1444,22 @@ async function addRecipeToShoppingList(recipeId) {
 
 async function removeRecipeFromShoppingList(recipeId) {
   const newAddedIds = [...state.addedRecipeIds].filter(id => id !== recipeId);
-  let items = buildShoppingListFromSources(state.manualItems, newAddedIds);
+  // Also remove any partial (selected-ingredient) entries tagged with this recipe
+  const newManualItems = state.manualItems.filter(mi => mi.recipeId !== recipeId);
+  let items = buildShoppingListFromSources(newManualItems, newAddedIds);
   items = items.map(item => {
     const existing = state.shoppingList.find(e => e.normalizedName === item.normalizedName);
     return { ...item, checked: existing?.checked || false };
   });
-  await writeShoppingList(items, newAddedIds);
+  // Drop qty overrides for ingredients that are no longer in the list after removal
+  const remainingNames = new Set(items.map(i => i.normalizedName));
+  const newQtyOverrides = Object.fromEntries(Object.entries(state.qtyOverrides).filter(([k]) => remainingNames.has(k)));
+  await writeShoppingList(items, newAddedIds, newManualItems, state.suppressedItems, newQtyOverrides);
 }
 
 async function rebuildShoppingListContribution(recipeId, newIngredients) {
   const addedIds = [...state.addedRecipeIds];
-  let items = mergeIngredients([], state.manualItems, '__manual__');
-  for (const rId of addedIds) {
-    const ings = rId === recipeId ? newIngredients : state.recipes.find(r => r.id === rId)?.ingredients || [];
-    items = mergeIngredients(items, ings, rId);
-  }
+  let items = buildShoppingListFromSources(state.manualItems, addedIds, state.suppressedItems, state.qtyOverrides, { [recipeId]: newIngredients });
   items = items.map(item => {
     const existing = state.shoppingList.find(e => e.normalizedName === item.normalizedName);
     return { ...item, checked: existing?.checked || false };
@@ -1430,7 +1467,7 @@ async function rebuildShoppingListContribution(recipeId, newIngredients) {
   await writeShoppingList(items, addedIds);
 }
 
-async function writeShoppingList(items, addedRecipeIds, manualItems = state.manualItems) {
+async function writeShoppingList(items, addedRecipeIds, manualItems = state.manualItems, suppressedItems = state.suppressedItems, qtyOverrides = state.qtyOverrides) {
   const batch = writeBatch(db);
 
   for (const item of state.shoppingList) {
@@ -1443,7 +1480,7 @@ async function writeShoppingList(items, addedRecipeIds, manualItems = state.manu
     batch.set(ref, { ...data, order: i });
   });
 
-  batch.set(doc(db, 'meta', 'shoppingMeta'), { addedRecipeIds, manualItems });
+  batch.set(doc(db, 'meta', 'shoppingMeta'), { addedRecipeIds, manualItems, suppressedItems, qtyOverrides });
   await batch.commit();
 }
 
@@ -1462,7 +1499,7 @@ async function clearShoppingList() {
     for (const item of state.shoppingList) {
       batch.delete(doc(db, 'shoppingList', item.id));
     }
-    batch.set(doc(db, 'meta', 'shoppingMeta'), { addedRecipeIds: [], manualItems: [] });
+    batch.set(doc(db, 'meta', 'shoppingMeta'), { addedRecipeIds: [], manualItems: [], suppressedItems: [], qtyOverrides: {} });
     await batch.commit();
   } catch (err) {
     console.error(err);
@@ -1474,11 +1511,20 @@ async function clearCheckedItems() {
   const checked = state.shoppingList.filter(i => i.checked);
   if (!checked.length) { showToast('No checked items to clear'); return; }
   try {
-    const batch = writeBatch(db);
-    for (const item of checked) {
-      batch.delete(doc(db, 'shoppingList', item.id));
-    }
-    await batch.commit();
+    const checkedNames = new Set(checked.map(i => i.normalizedName));
+    // Remove cleared items from manualItems so they don't regenerate
+    const newManualItems = state.manualItems.filter(mi => !checkedNames.has(normalizeIngredientName(mi.name)));
+    // Suppress cleared items so recipe-sourced ones don't regenerate on rebuild
+    const newSuppressedItems = [...new Set([...state.suppressedItems, ...checkedNames])];
+    // Drop any qty overrides for cleared items
+    const newQtyOverrides = Object.fromEntries(Object.entries(state.qtyOverrides).filter(([k]) => !checkedNames.has(k)));
+    // Rebuild list from updated sources (suppressed items are now excluded)
+    let items = buildShoppingListFromSources(newManualItems, [...state.addedRecipeIds], newSuppressedItems, newQtyOverrides);
+    items = items.map(item => {
+      const existing = state.shoppingList.find(e => e.normalizedName === item.normalizedName);
+      return { ...item, checked: existing?.checked || false };
+    });
+    await writeShoppingList(items, [...state.addedRecipeIds], newManualItems, newSuppressedItems, newQtyOverrides);
   } catch (err) {
     console.error(err);
     showToast('Error clearing checked items');
@@ -1490,12 +1536,15 @@ async function addManualItem(text) {
   if (!parsed || !parsed.name) { showToast('Could not parse ingredient'); return; }
 
   const newManualItems = [...state.manualItems, { qty: parsed.qty, unit: parsed.unit, name: parsed.name }];
-  let items = buildShoppingListFromSources(newManualItems, [...state.addedRecipeIds]);
+  // If this item was previously suppressed, un-suppress it — user is explicitly re-adding it
+  const normalizedName = normalizeIngredientName(parsed.name);
+  const newSuppressedItems = state.suppressedItems.filter(n => n !== normalizedName);
+  let items = buildShoppingListFromSources(newManualItems, [...state.addedRecipeIds], newSuppressedItems, state.qtyOverrides);
   items = items.map(item => {
     const existing = state.shoppingList.find(e => e.normalizedName === item.normalizedName);
     return { ...item, checked: existing?.checked || false };
   });
-  await writeShoppingList(items, [...state.addedRecipeIds], newManualItems);
+  await writeShoppingList(items, [...state.addedRecipeIds], newManualItems, newSuppressedItems, state.qtyOverrides);
   showToast(`Added: ${parsed.name}`);
 }
 
